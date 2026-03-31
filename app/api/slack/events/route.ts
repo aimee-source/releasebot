@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
+import { waitUntil } from "@vercel/functions";
 import { WebClient } from "@slack/web-api";
 import Anthropic from "@anthropic-ai/sdk";
 import { verifySlackSignature } from "@/lib/slack";
+
+export const maxDuration = 60;
 
 const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -48,107 +51,126 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: true });
   }
 
-  // Fetch recent channel history to find the human release message + image
-  let humanMessageText = "";
-  let imageBase64: string | null = null;
-  let imageMediaType: "image/png" | "image/jpeg" | "image/gif" | "image/webp" = "image/png";
+  // Respond to Slack immediately (must be within 3 seconds)
+  // All heavy processing happens in the background
+  waitUntil(processRelease(event));
+  return NextResponse.json({ ok: true });
+}
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function processRelease(event: any) {
   try {
-    const history = await slack.conversations.history({
-      channel: process.env.RELEASES_CHANNEL_ID!,
-      latest: event.ts,
-      limit: 20
-    });
-    const humanMessage = history.messages?.find(m => !m.bot_id && m.type === "message");
-    humanMessageText = humanMessage?.text ?? "";
+    // Fetch recent channel history to find the human release message + image
+    let humanMessageText = "";
+    let imageBase64: string | null = null;
+    let imageMediaType: "image/png" | "image/jpeg" | "image/gif" | "image/webp" = "image/png";
 
-    // Download the first image attachment if present
-    const file = humanMessage?.files?.[0];
-    if (file?.url_private && file.mimetype?.startsWith("image/")) {
-      const res = await fetch(file.url_private, {
-        headers: { Authorization: `Bearer ${process.env.SLACK_BOT_TOKEN}` }
-      });
-      if (!res.ok) throw new Error(`Failed to fetch image: ${res.status}`);
-      const contentLength = parseInt(res.headers.get("content-length") || "0");
-      if (contentLength > MAX_IMAGE_BYTES) throw new Error("Image too large");
-      const buffer = await res.arrayBuffer();
-      if (buffer.byteLength > MAX_IMAGE_BYTES) throw new Error("Image exceeds size limit");
-      imageBase64 = Buffer.from(buffer).toString("base64");
-      imageMediaType = (file.mimetype as typeof imageMediaType) ?? "image/png";
-    }
-  } catch {
-    // proceed without it
-  }
-
-  // Extract Linear ticket IDs from the image using Claude
-  let linearContext = "";
-  if (imageBase64) {
     try {
-      const extractResponse = await anthropic.messages.create({
-        model: "claude-haiku-4-5-20251001",
-        max_tokens: 200,
-        messages: [{
-          role: "user",
-          content: [
-            { type: "image", source: { type: "base64", media_type: imageMediaType, data: imageBase64 } },
-            { type: "text", text: "Extract all Linear ticket IDs from this image (format like S2-1234). Return only a JSON array of strings, e.g. [\"S2-1234\", \"S2-5678\"]. If none found, return []." }
-          ]
-        }]
+      const history = await slack.conversations.history({
+        channel: process.env.RELEASES_CHANNEL_ID!,
+        latest: event.ts,
+        limit: 20,
+        inclusive: false,
       });
 
-      const extractText = extractResponse.content[0].type === "text" ? extractResponse.content[0].text : "[]";
-      let ticketIds: string[] = [];
-      try {
-        const parsed = JSON.parse(extractText);
-        ticketIds = Array.isArray(parsed)
-          ? parsed.filter((id): id is string => typeof id === "string" && TICKET_ID_REGEX.test(id))
-          : [];
-      } catch {
-        // no valid ticket IDs
-      }
+      console.log("history messages count:", history.messages?.length);
 
-      if (ticketIds.length > 0) {
-        const linearRes = await fetch("https://api.linear.app/graphql", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": process.env.LINEAR_API_KEY!
-          },
-          body: JSON.stringify({
-            query: `{ issues(filter: { identifier: { in: ${JSON.stringify(ticketIds)} } }) { nodes { identifier title description } } }`
-          })
+      const humanMessage = history.messages?.find(m => !m.bot_id && m.type === "message");
+      humanMessageText = humanMessage?.text ?? "";
+      console.log("humanMessageText:", humanMessageText, "files:", humanMessage?.files?.length ?? 0);
+
+      // Download the first image attachment if present
+      const file = humanMessage?.files?.[0];
+      if (file?.url_private && file.mimetype?.startsWith("image/")) {
+        console.log("downloading image:", file.url_private, file.mimetype);
+        const res = await fetch(file.url_private, {
+          headers: { Authorization: `Bearer ${process.env.SLACK_BOT_TOKEN}` }
         });
-        if (!linearRes.ok) throw new Error(`Linear API error: ${linearRes.status}`);
-        const linearData = await linearRes.json();
-        const issues = linearData?.data?.issues?.nodes ?? [];
-        if (issues.length > 0) {
-          linearContext = issues.map((i: { identifier: string; title: string; description?: string }) =>
-            `${i.identifier}: ${i.title}${i.description ? ` — ${i.description.slice(0, 200)}` : ""}`
-          ).join("\n");
-        }
+        if (!res.ok) throw new Error(`Failed to fetch image: ${res.status}`);
+        const buffer = await res.arrayBuffer();
+        if (buffer.byteLength > MAX_IMAGE_BYTES) throw new Error("Image exceeds size limit");
+        imageBase64 = Buffer.from(buffer).toString("base64");
+        imageMediaType = (file.mimetype as typeof imageMediaType) ?? "image/png";
+        console.log("image downloaded, bytes:", buffer.byteLength);
       }
-    } catch {
-      // proceed without Linear context
+    } catch (err) {
+      console.error("history/image fetch error:", err);
     }
-  }
 
-  // Use Claude to generate a clean title and coach-friendly summary
-  let title = "New Release";
-  let summary = humanMessageText || (event.text ?? "");
-
-  try {
-    const userContent: Anthropic.MessageParam["content"] = [];
-
+    // Extract Linear ticket IDs from the image using Claude
+    let linearContext = "";
     if (imageBase64) {
-      userContent.push({
-        type: "image",
-        source: { type: "base64", media_type: imageMediaType, data: imageBase64 }
-      });
+      try {
+        const extractResponse = await anthropic.messages.create({
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 200,
+          messages: [{
+            role: "user",
+            content: [
+              { type: "image", source: { type: "base64", media_type: imageMediaType, data: imageBase64 } },
+              { type: "text", text: "Extract all Linear ticket IDs from this image (format like S2-1234 or AB-123). Return only a JSON array of strings, e.g. [\"S2-1234\", \"S2-5678\"]. If none found, return []." }
+            ]
+          }]
+        });
+
+        const extractText = extractResponse.content[0].type === "text" ? extractResponse.content[0].text : "[]";
+        console.log("ticket extract response:", extractText);
+        let ticketIds: string[] = [];
+        try {
+          const arrayMatch = extractText.match(/\[[\s\S]*\]/);
+          const parsed = JSON.parse(arrayMatch ? arrayMatch[0] : extractText);
+          ticketIds = Array.isArray(parsed)
+            ? parsed.filter((id): id is string => typeof id === "string" && TICKET_ID_REGEX.test(id))
+            : [];
+        } catch {
+          // no valid ticket IDs
+        }
+
+        console.log("ticketIds:", ticketIds);
+
+        if (ticketIds.length > 0) {
+          const linearRes = await fetch("https://api.linear.app/graphql", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": process.env.LINEAR_API_KEY!
+            },
+            body: JSON.stringify({
+              query: `{ issues(filter: { identifier: { in: ${JSON.stringify(ticketIds)} } }) { nodes { identifier title description } } }`
+            })
+          });
+          if (!linearRes.ok) throw new Error(`Linear API error: ${linearRes.status}`);
+          const linearData = await linearRes.json();
+          const issues = linearData?.data?.issues?.nodes ?? [];
+          if (issues.length > 0) {
+            linearContext = issues.map((i: { identifier: string; title: string; description?: string }) =>
+              `${i.identifier}: ${i.title}${i.description ? ` — ${i.description.slice(0, 200)}` : ""}`
+            ).join("\n");
+          }
+          console.log("linearContext:", linearContext);
+        }
+      } catch (err) {
+        console.error("Linear/ticket extraction error:", err);
+      }
     }
 
-    userContent.push({
-      type: "text",
-      text: `You are summarizing a software release note for assistant coaches at a fitness coaching company called Avida.
+    // Use Claude to generate a clean title and coach-friendly summary
+    let title = "New Release";
+    let summary = humanMessageText || (event.text ?? "");
+
+    try {
+      const userContent: Anthropic.MessageParam["content"] = [];
+
+      if (imageBase64) {
+        userContent.push({
+          type: "image",
+          source: { type: "base64", media_type: imageMediaType, data: imageBase64 }
+        });
+      }
+
+      userContent.push({
+        type: "text",
+        text: `You are summarizing a software release note for assistant coaches at a fitness coaching company called Avida.
 ${humanMessageText ? `\nRelease note text: ${humanMessageText}` : ""}
 ${imageBase64 ? "\nThe image above shows the release details (commit list, features, fixes)." : ""}
 ${linearContext ? `\nLinear ticket details:\n${linearContext}` : ""}
@@ -156,59 +178,62 @@ ${linearContext ? `\nLinear ticket details:\n${linearContext}` : ""}
 Generate a clean title (5–8 words, no technical jargon or ticket numbers) and a 1–2 sentence plain English summary that an assistant coach would understand and find relevant.
 
 Respond only with JSON: {"title": "...", "summary": "..."}`
-    });
+      });
 
-    const response = await anthropic.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 300,
-      messages: [{ role: "user", content: userContent }]
-    });
+      const response = await anthropic.messages.create({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 300,
+        messages: [{ role: "user", content: userContent }]
+      });
 
-    const text = response.content[0].type === "text" ? response.content[0].text : "";
-    // Extract JSON even if Claude wraps it in markdown code blocks
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : text);
-    if (typeof parsed.title === "string" && typeof parsed.summary === "string") {
-      title = parsed.title;
-      summary = parsed.summary;
-    }
-  } catch (err) {
-    console.error("Claude parsing failed:", err);
-  }
-
-  // Post to review channel with approve/reject buttons
-  await slack.chat.postMessage({
-    channel: process.env.REVIEW_CHANNEL_ID!,
-    text: `New release pending approval: ${title}`,
-    blocks: [
-      {
-        type: "section",
-        text: {
-          type: "mrkdwn",
-          text: `*📣 New release pending approval*\n\n*${title}*\n\n${summary}`
-        }
-      },
-      {
-        type: "actions",
-        elements: [
-          {
-            type: "button",
-            text: { type: "plain_text", text: "✏️ Edit & Post" },
-            style: "primary",
-            action_id: "approve_release",
-            value: JSON.stringify({ title, summary })
-          },
-          {
-            type: "button",
-            text: { type: "plain_text", text: "❌ Reject" },
-            style: "danger",
-            action_id: "reject_release",
-            value: "reject"
-          }
-        ]
+      const text = response.content[0].type === "text" ? response.content[0].text : "";
+      console.log("Claude summary response:", text);
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : text);
+      if (typeof parsed.title === "string" && typeof parsed.summary === "string") {
+        title = parsed.title;
+        summary = parsed.summary;
       }
-    ]
-  });
+    } catch (err) {
+      console.error("Claude summary failed:", err);
+    }
 
-  return NextResponse.json({ ok: true });
+    // Post to review channel with edit/reject buttons
+    await slack.chat.postMessage({
+      channel: process.env.REVIEW_CHANNEL_ID!,
+      text: `New release pending approval: ${title}`,
+      blocks: [
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `*📣 New release pending approval*\n\n*${title}*\n\n${summary}`
+          }
+        },
+        {
+          type: "actions",
+          elements: [
+            {
+              type: "button",
+              text: { type: "plain_text", text: "✏️ Edit & Post" },
+              style: "primary",
+              action_id: "approve_release",
+              value: JSON.stringify({ title, summary })
+            },
+            {
+              type: "button",
+              text: { type: "plain_text", text: "❌ Reject" },
+              style: "danger",
+              action_id: "reject_release",
+              value: "reject"
+            }
+          ]
+        }
+      ]
+    });
+
+    console.log("Posted to review channel:", title);
+  } catch (err) {
+    console.error("processRelease error:", err);
+  }
 }
