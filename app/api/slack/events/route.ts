@@ -35,6 +35,8 @@ export async function POST(request: NextRequest) {
 
   const event = body.event;
 
+  console.log("incoming event:", JSON.stringify({ type: body.type, event_type: event?.type, channel: event?.channel, subtype: event?.subtype, bot_id: event?.bot_id, releases_channel: process.env.RELEASES_CHANNEL_ID }));
+
   // Only process messages from #releases channel
   if (!event || event.type !== "message" || event.channel !== process.env.RELEASES_CHANNEL_ID) {
     return NextResponse.json({ ok: true });
