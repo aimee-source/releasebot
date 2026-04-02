@@ -35,19 +35,27 @@ export async function POST(request: NextRequest) {
 
   const event = body.event;
 
-  console.log("incoming event:", JSON.stringify({ type: body.type, event_type: event?.type, channel: event?.channel, subtype: event?.subtype, bot_id: event?.bot_id, releases_channel: process.env.RELEASES_CHANNEL_ID }));
-
   // Only process messages from #releases channel
-  if (!event || event.type !== "message" || event.channel !== process.env.RELEASES_CHANNEL_ID) {
+  // Hardcoded fallback in case env var isn't set
+  const releasesChannelId = process.env.RELEASES_CHANNEL_ID || "C028K3WGYV7";
+  if (!event || event.type !== "message" || event.channel !== releasesChannelId) {
     return NextResponse.json({ ok: true });
   }
 
-  console.log("releases event:", JSON.stringify({ bot_id: event.bot_id, text: event.text, subtype: event.subtype }));
+  // DEBUG: post raw event info to review channel so we can see it without log truncation
+  if (process.env.REVIEW_CHANNEL_ID) {
+    waitUntil(slack.chat.postMessage({
+      channel: process.env.REVIEW_CHANNEL_ID,
+      text: `🔍 #releases event | bot_id: \`${event.bot_id ?? "none"}\` | subtype: \`${event.subtype ?? "none"}\` | text: ${(event.text ?? "(empty)").slice(0, 200)}`
+    }));
+  }
 
   // Only trigger on successful production deployments from the deploy bot
-  const isProductionSuccess = event.bot_id &&
-    event.text?.includes("Success") &&
-    event.text?.includes("production");
+  // Case-insensitive check to handle variations ("Success", "success", "succeeded", etc.)
+  const textLower = (event.text ?? "").toLowerCase();
+  const isProductionSuccess = (event.bot_id || event.subtype === "bot_message") &&
+    (textLower.includes("success") || textLower.includes("succeeded") || textLower.includes("deploy")) &&
+    textLower.includes("production");
 
   if (!isProductionSuccess) {
     return NextResponse.json({ ok: true });
