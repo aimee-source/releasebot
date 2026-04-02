@@ -90,7 +90,11 @@ async function processRelease(event: any) {
 
       console.log("history messages count:", history.messages?.length);
 
-      const humanMessage = history.messages?.find(m => !m.bot_id && m.type === "message");
+      // Prefer the most recent human message that has an image attachment,
+      // fall back to the most recent human message without one
+      const humanMessages = history.messages?.filter(m => !m.bot_id && m.type === "message") ?? [];
+      const humanMessage = humanMessages.find(m => m.files?.some((f: { mimetype?: string }) => f.mimetype?.startsWith("image/")))
+        ?? humanMessages[0];
       humanMessageText = humanMessage?.text ?? "";
       console.log("humanMessageText:", humanMessageText, "files:", humanMessage?.files?.length ?? 0);
 
