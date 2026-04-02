@@ -101,7 +101,6 @@ async function processRelease(event: any) {
       // Download the first image attachment if present
       const file = humanMessage?.files?.[0];
       if (file?.url_private && file.mimetype?.startsWith("image/")) {
-        console.log("downloading image:", file.url_private, file.mimetype);
         const res = await fetch(file.url_private, {
           headers: { Authorization: `Bearer ${process.env.SLACK_BOT_TOKEN}` }
         });
@@ -110,7 +109,15 @@ async function processRelease(event: any) {
         if (buffer.byteLength > MAX_IMAGE_BYTES) throw new Error("Image exceeds size limit");
         imageBase64 = Buffer.from(buffer).toString("base64");
         imageMediaType = (file.mimetype as typeof imageMediaType) ?? "image/png";
-        console.log("image downloaded, bytes:", buffer.byteLength);
+      } else {
+        // Post debug message so we can see why no image was found
+        if (process.env.REVIEW_CHANNEL_ID) {
+          const slack2 = new WebClient(process.env.SLACK_BOT_TOKEN);
+          await slack2.chat.postMessage({
+            channel: process.env.REVIEW_CHANNEL_ID,
+            text: `⚠️ No image found | humanMsg: "${humanMessageText.slice(0, 100)}" | files: ${JSON.stringify(humanMessage?.files?.map((f: { mimetype?: string; url_private?: string }) => f.mimetype) ?? [])}`
+          });
+        }
       }
     } catch (err) {
       console.error("history/image fetch error:", err);
@@ -176,8 +183,7 @@ async function processRelease(event: any) {
       }
     }
 
-    // Fallback: no tickets found — post one general review card
-    await postReviewCard({ issue: null, linearContext, imageBase64, imageMediaType, humanMessageText });
+    // No tickets found — nothing to post
 
   } catch (err) {
     console.error("processRelease error:", err);
