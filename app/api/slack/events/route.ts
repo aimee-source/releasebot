@@ -42,20 +42,24 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: true });
   }
 
+  // Build searchable text from both event.text and any attachments
+  // (System2 Deploy Bot puts content in attachments, not event.text)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const attachmentText = (event.attachments ?? []).map((a: any) => `${a.text ?? ""} ${a.fallback ?? ""} ${a.pretext ?? ""}`).join(" ");
+  const fullText = `${event.text ?? ""} ${attachmentText}`.toLowerCase();
+
   // DEBUG: post raw event info to review channel so we can see it without log truncation
   if (process.env.REVIEW_CHANNEL_ID) {
     waitUntil(slack.chat.postMessage({
       channel: process.env.REVIEW_CHANNEL_ID,
-      text: `🔍 #releases event | bot_id: \`${event.bot_id ?? "none"}\` | subtype: \`${event.subtype ?? "none"}\` | text: ${(event.text ?? "(empty)").slice(0, 200)}`
+      text: `🔍 #releases event | bot_id: \`${event.bot_id ?? "none"}\` | subtype: \`${event.subtype ?? "none"}\` | fullText: ${fullText.slice(0, 200)}`
     }));
   }
 
   // Only trigger on successful production deployments from the deploy bot
-  // Case-insensitive check to handle variations ("Success", "success", "succeeded", etc.)
-  const textLower = (event.text ?? "").toLowerCase();
   const isProductionSuccess = (event.bot_id || event.subtype === "bot_message") &&
-    (textLower.includes("success") || textLower.includes("succeeded") || textLower.includes("deploy")) &&
-    textLower.includes("production");
+    fullText.includes("success") &&
+    fullText.includes("production");
 
   if (!isProductionSuccess) {
     return NextResponse.json({ ok: true });
@@ -76,8 +80,9 @@ async function processRelease(event: any) {
     let imageMediaType: "image/png" | "image/jpeg" | "image/gif" | "image/webp" = "image/png";
 
     try {
+      const releasesChannelId = process.env.RELEASES_CHANNEL_ID || "C028K3WGYV7";
       const history = await slack.conversations.history({
-        channel: process.env.RELEASES_CHANNEL_ID!,
+        channel: releasesChannelId,
         latest: event.ts,
         limit: 20,
         inclusive: false,
