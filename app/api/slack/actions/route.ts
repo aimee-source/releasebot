@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
+import { waitUntil } from "@vercel/functions";
 import { WebClient } from "@slack/web-api";
 import { verifySlackSignature } from "@/lib/slack";
+
+export const maxDuration = 60;
 
 const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
 
@@ -66,26 +69,29 @@ export async function POST(request: NextRequest) {
         });
       }
 
-      await slack.chat.postMessage({
-        channel: process.env.ASSISTANT_COACHES_CHANNEL_ID!,
-        text: `${title} — ${summary}`,
-        blocks: postBlocks
-      });
-
-      await slack.chat.update({
-        channel: channelId,
-        ts: messageTs,
-        text: `✅ Posted to #assistant-coaches`,
-        blocks: [
-          {
-            type: "section",
-            text: {
-              type: "mrkdwn",
-              text: `✅ *Posted to #assistant-coaches*\n\n*${title}*\n\n${summary}`
+      // Respond immediately to close the modal (Slack requires response within 3s)
+      // Do the actual posting in the background
+      waitUntil((async () => {
+        await slack.chat.postMessage({
+          channel: process.env.ASSISTANT_COACHES_CHANNEL_ID!,
+          text: `${title} — ${summary}`,
+          blocks: postBlocks
+        });
+        await slack.chat.update({
+          channel: channelId,
+          ts: messageTs,
+          text: `✅ Posted to #assistant-coaches`,
+          blocks: [
+            {
+              type: "section",
+              text: {
+                type: "mrkdwn",
+                text: `✅ *Posted to #assistant-coaches*\n\n*${title}*\n\n${summary}`
+              }
             }
-          }
-        ]
-      });
+          ]
+        });
+      })());
 
       return NextResponse.json({});
     }
