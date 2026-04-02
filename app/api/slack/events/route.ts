@@ -160,22 +160,46 @@ async function processRelease(event: any) {
           });
           if (!linearRes.ok) throw new Error(`Linear API error: ${linearRes.status}`);
           const linearData = await linearRes.json();
-          const issues = linearData?.data?.issues?.nodes ?? [];
-          if (issues.length > 0) {
-            linearContext = issues.map((i: { identifier: string; title: string; description?: string }) =>
-              `${i.identifier}: ${i.title}${i.description ? ` — ${i.description.slice(0, 200)}` : ""}`
-            ).join("\n");
+          const issues: { identifier: string; title: string; description?: string }[] = linearData?.data?.issues?.nodes ?? [];
+
+          // Post one review card per ticket
+          for (const issue of issues) {
+            linearContext = `${issue.identifier}: ${issue.title}${issue.description ? ` — ${issue.description.slice(0, 200)}` : ""}`;
+            await postReviewCard({ issue, linearContext, imageBase64, imageMediaType, humanMessageText });
           }
-          console.log("linearContext:", linearContext);
+
+          // If we posted per-ticket cards, we're done
+          if (issues.length > 0) return;
         }
       } catch (err) {
         console.error("Linear/ticket extraction error:", err);
       }
     }
 
+    // Fallback: no tickets found — post one general review card
+    await postReviewCard({ issue: null, linearContext, imageBase64, imageMediaType, humanMessageText });
+
+  } catch (err) {
+    console.error("processRelease error:", err);
+  }
+}
+
+async function postReviewCard({
+  issue,
+  linearContext,
+  imageBase64,
+  imageMediaType,
+  humanMessageText,
+}: {
+  issue: { identifier: string; title: string; description?: string } | null;
+  linearContext: string;
+  imageBase64: string | null;
+  imageMediaType: "image/png" | "image/jpeg" | "image/gif" | "image/webp";
+  humanMessageText: string;
+}) {
     // Use Claude to generate a clean title and coach-friendly summary
-    let title = "New Release";
-    let summary = humanMessageText || (event.text ?? "");
+    let title = issue ? issue.title : "New Release";
+    let summary = humanMessageText;
 
     try {
       const userContent: Anthropic.MessageParam["content"] = [];
@@ -217,6 +241,8 @@ Respond only with JSON: {"title": "...", "summary": "..."}`
       console.error("Claude summary failed:", err);
     }
 
+    const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
+
     // Post to review channel with edit/reject buttons
     await slack.chat.postMessage({
       channel: process.env.REVIEW_CHANNEL_ID!,
@@ -252,7 +278,4 @@ Respond only with JSON: {"title": "...", "summary": "..."}`
     });
 
     console.log("Posted to review channel:", title);
-  } catch (err) {
-    console.error("processRelease error:", err);
-  }
 }
