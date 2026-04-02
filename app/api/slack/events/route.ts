@@ -125,6 +125,13 @@ async function processRelease(event: any) {
 
     // Extract Linear ticket IDs from the image using Claude
     let linearContext = "";
+    const debugPost = async (msg: string) => {
+      if (process.env.REVIEW_CHANNEL_ID) {
+        const s = new WebClient(process.env.SLACK_BOT_TOKEN);
+        await s.chat.postMessage({ channel: process.env.REVIEW_CHANNEL_ID, text: msg });
+      }
+    };
+
     if (imageBase64) {
       try {
         const extractResponse = await anthropic.messages.create({
@@ -140,7 +147,6 @@ async function processRelease(event: any) {
         });
 
         const extractText = extractResponse.content[0].type === "text" ? extractResponse.content[0].text : "[]";
-        console.log("ticket extract response:", extractText);
         let ticketIds: string[] = [];
         try {
           const arrayMatch = extractText.match(/\[[\s\S]*\]/);
@@ -152,7 +158,7 @@ async function processRelease(event: any) {
           // no valid ticket IDs
         }
 
-        console.log("ticketIds:", ticketIds);
+        await debugPost(`🔍 Image read | Claude raw: \`${extractText.slice(0, 100)}\` | ticketIds: ${JSON.stringify(ticketIds)}`);
 
         if (ticketIds.length > 0) {
           const linearRes = await fetch("https://api.linear.app/graphql", {
@@ -169,17 +175,18 @@ async function processRelease(event: any) {
           const linearData = await linearRes.json();
           const issues: { identifier: string; title: string; description?: string }[] = linearData?.data?.issues?.nodes ?? [];
 
+          await debugPost(`🔍 Linear lookup | found ${issues.length} issue(s): ${issues.map(i => i.identifier).join(", ") || "none"}`);
+
           // Post one review card per ticket
           for (const issue of issues) {
             linearContext = `${issue.identifier}: ${issue.title}${issue.description ? ` — ${issue.description.slice(0, 200)}` : ""}`;
             await postReviewCard({ issue, linearContext, imageBase64, imageMediaType, humanMessageText });
           }
 
-          // If we posted per-ticket cards, we're done
           if (issues.length > 0) return;
         }
       } catch (err) {
-        console.error("Linear/ticket extraction error:", err);
+        await debugPost(`❌ Extraction error: ${String(err).slice(0, 200)}`);
       }
     }
 
