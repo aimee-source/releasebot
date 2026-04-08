@@ -168,12 +168,33 @@ async function processRelease(event: any) {
               "Authorization": process.env.LINEAR_API_KEY!
             },
             body: JSON.stringify({
-              query: `{ issues(filter: { identifier: { in: ${JSON.stringify(ticketIds)} } }) { nodes { identifier title description } } }`
+              query: `{
+                issues(filter: { identifier: { in: ${JSON.stringify(ticketIds)} } }) {
+                  nodes {
+                    identifier
+                    title
+                    description
+                    startedAt
+                    history(first: 50) {
+                      nodes {
+                        createdAt
+                        toState { name }
+                      }
+                    }
+                  }
+                }
+              }`
             })
           });
           if (!linearRes.ok) throw new Error(`Linear API error: ${linearRes.status}`);
           const linearData = await linearRes.json();
-          const issues: { identifier: string; title: string; description?: string }[] = linearData?.data?.issues?.nodes ?? [];
+          const issues: {
+            identifier: string;
+            title: string;
+            description?: string;
+            startedAt?: string;
+            history?: { nodes: { createdAt: string; toState?: { name: string } }[] };
+          }[] = linearData?.data?.issues?.nodes ?? [];
 
           await debugPost(`🔍 Linear lookup | found ${issues.length} issue(s): ${issues.map(i => i.identifier).join(", ") || "none"}`);
 
@@ -193,11 +214,19 @@ async function processRelease(event: any) {
               body: JSON.stringify({
                 secret: process.env.ENGCAL_SECRET,
                 releaseDate: Date.now(),
-                releases: issues.map(i => ({
-                  ticketId: i.identifier,
-                  title: i.title,
-                  project,
-                })),
+                releases: issues.map(i => {
+                  // Find when ticket entered "In Review" state from history
+                  const inReviewEntry = i.history?.nodes.find(
+                    h => h.toState?.name?.toLowerCase().includes("in review")
+                  );
+                  return {
+                    ticketId: i.identifier,
+                    title: i.title,
+                    project,
+                    ...(i.startedAt ? { startDate: new Date(i.startedAt).getTime() } : {}),
+                    ...(inReviewEntry ? { demoDate: new Date(inReviewEntry.createdAt).getTime() } : {}),
+                  };
+                }),
               }),
             }).catch(err => console.error("engcal push failed:", err));
           }
