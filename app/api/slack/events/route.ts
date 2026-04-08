@@ -177,6 +177,31 @@ async function processRelease(event: any) {
 
           await debugPost(`🔍 Linear lookup | found ${issues.length} issue(s): ${issues.map(i => i.identifier).join(", ") || "none"}`);
 
+          // Push to engcal
+          if (issues.length > 0 && process.env.ENGCAL_URL && process.env.ENGCAL_SECRET) {
+            // Detect project from deploy bot attachment text
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const attachText = (event.attachments ?? []).map((a: any) => `${a.text ?? ""} ${a.fallback ?? ""}`).join(" ").toLowerCase();
+            const project = attachText.includes("mobile") ? "mobile"
+              : attachText.includes("function") ? "functions"
+              : attachText.includes("server") ? "server"
+              : "web";
+
+            await fetch(`${process.env.ENGCAL_URL}/api/add-release`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                secret: process.env.ENGCAL_SECRET,
+                releaseDate: Date.now(),
+                releases: issues.map(i => ({
+                  ticketId: i.identifier,
+                  title: i.title,
+                  project,
+                })),
+              }),
+            }).catch(err => console.error("engcal push failed:", err));
+          }
+
           // Post one review card per ticket
           for (const issue of issues) {
             linearContext = `${issue.identifier}: ${issue.title}${issue.description ? ` — ${issue.description.slice(0, 200)}` : ""}`;
