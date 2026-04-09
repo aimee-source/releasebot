@@ -11,6 +11,7 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 const TICKET_ID_REGEX = /\b([A-Z][A-Z0-9]+-\d+)\b/g;
 
+// Fallback repo map if URL isn't in the Slack message
 const GITHUB_REPOS: Record<string, string> = {
   mobile: "Fitmoola/system2-mobile-react-native",
   functions: "Fitmoola/system2-server",
@@ -75,13 +76,7 @@ export async function POST(request: NextRequest) {
   return NextResponse.json({ ok: true });
 }
 
-async function getTicketsFromGitHub(attachText: string): Promise<string[]> {
-  const project = attachText.includes("mobile") ? "mobile"
-    : attachText.includes("function") ? "functions"
-    : attachText.includes("server") ? "server"
-    : "web";
-
-  const repo = GITHUB_REPOS[project];
+async function getTicketsFromGitHub(fullText: string, attachText: string): Promise<string[]> {
   const token = process.env.GITHUB_TOKEN;
   if (!token) throw new Error("GITHUB_TOKEN not set");
 
@@ -91,36 +86,59 @@ async function getTicketsFromGitHub(attachText: string): Promise<string[]> {
     "X-GitHub-Api-Version": "2022-11-28",
   };
 
-  // Get recent production deployments
-  const deploymentsRes = await fetch(
-    `https://api.github.com/repos/${repo}/deployments?environment=production&per_page=10`,
+  // Extract repo and run ID directly from the GitHub Actions URL in the Slack message
+  // e.g. https://github.com/fitmoola/system2-web/actions/runs/242064
+  const urlMatch = fullText.match(/github\.com\/([\w-]+\/[\w-]+)\/actions\/runs\/(\d+)/i);
+
+  let repo: string;
+  let currentRunId: string;
+
+  if (urlMatch) {
+    repo = urlMatch[1]; // e.g. "fitmoola/system2-web"
+    currentRunId = urlMatch[2];
+  } else {
+    // Fallback: map from attachment text keywords
+    const project = attachText.includes("mobile") ? "mobile"
+      : attachText.includes("function") ? "functions"
+      : attachText.includes("server") ? "server"
+      : "web";
+    repo = GITHUB_REPOS[project];
+    currentRunId = "";
+  }
+
+  // Get current run's SHA and workflow ID
+  let currentSha: string;
+  let workflowId: number;
+
+  if (currentRunId) {
+    const runRes = await fetch(`https://api.github.com/repos/${repo}/actions/runs/${currentRunId}`, { headers });
+    if (!runRes.ok) throw new Error(`GitHub run fetch error: ${runRes.status} for run ${currentRunId}`);
+    const run = await runRes.json();
+    currentSha = run.head_sha;
+    workflowId = run.workflow_id;
+  } else {
+    throw new Error("Could not determine GitHub Actions run from Slack message");
+  }
+
+  // Find the previous successful run of the same workflow
+  const runsRes = await fetch(
+    `https://api.github.com/repos/${repo}/actions/runs?workflow_id=${workflowId}&status=success&per_page=10`,
     { headers }
   );
-  if (!deploymentsRes.ok) throw new Error(`GitHub deployments error: ${deploymentsRes.status} for ${repo}`);
-  const deployments = await deploymentsRes.json();
+  if (!runsRes.ok) throw new Error(`GitHub runs list error: ${runsRes.status}`);
+  const runsData = await runsRes.json();
 
-  // Find the 2 most recent successful deployments
-  const successfulShas: string[] = [];
-  for (const dep of deployments) {
-    if (successfulShas.length >= 2) break;
-    const statusRes = await fetch(
-      `https://api.github.com/repos/${repo}/deployments/${dep.id}/statuses`,
-      { headers }
-    );
-    if (!statusRes.ok) continue;
-    const statuses = await statusRes.json();
-    if (statuses.some((s: { state: string }) => s.state === "success")) {
-      successfulShas.push(dep.sha);
-    }
-  }
+  // Find a run older than the current one
+  const prevRun = (runsData.workflow_runs ?? []).find(
+    (r: { id: number; head_sha: string }) => r.id !== parseInt(currentRunId) && r.head_sha !== currentSha
+  );
+  if (!prevRun) throw new Error(`No previous successful run found for workflow ${workflowId}`);
 
-  if (successfulShas.length < 2) {
-    throw new Error(`Not enough successful deployments found for ${repo} (found ${successfulShas.length})`);
-  }
+  const prevSha: string = prevRun.head_sha;
 
-  // Compare: base=older sha, head=newer sha
+  // Compare commits between previous and current SHA
   const compareRes = await fetch(
-    `https://api.github.com/repos/${repo}/compare/${successfulShas[1]}...${successfulShas[0]}`,
+    `https://api.github.com/repos/${repo}/compare/${prevSha}...${currentSha}`,
     { headers }
   );
   if (!compareRes.ok) throw new Error(`GitHub compare error: ${compareRes.status}`);
@@ -159,7 +177,7 @@ async function processRelease(event: any, fullText: string) {
     // Extract ticket IDs from GitHub commit history
     let ticketIds: string[] = [];
     try {
-      ticketIds = await getTicketsFromGitHub(fullText);
+      ticketIds = await getTicketsFromGitHub(fullText, attachText);
       await debugPost(`🔍 GitHub commits | project: ${project} | ticketIds: ${JSON.stringify(ticketIds)}`);
     } catch (err) {
       await debugPost(`❌ GitHub extraction error: ${String(err).slice(0, 200)}`);
