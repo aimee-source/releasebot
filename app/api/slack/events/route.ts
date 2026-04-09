@@ -169,7 +169,7 @@ async function processRelease(event: any) {
             },
             body: JSON.stringify({
               query: `{
-                issues(filter: { identifier: { in: ${JSON.stringify(ticketIds)} } }) {
+                issues(filter: { number: { in: ${JSON.stringify(ticketIds.map((id: string) => parseInt(id.split("-")[1])))} } }) {
                   nodes {
                     identifier
                     title
