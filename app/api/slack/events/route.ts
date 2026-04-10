@@ -62,17 +62,28 @@ export async function POST(request: NextRequest) {
     }));
   }
 
-  // Only trigger on successful production deployments from the deploy bot
-  const isProductionSuccess = (event.bot_id || event.subtype === "bot_message") &&
+  // Skip message_changed/file_share subtypes — only process original messages
+  if (event.subtype && event.subtype !== "bot_message") {
+    return NextResponse.json({ ok: true });
+  }
+
+  // Trigger on:
+  // 1. Deploy bot: bot message with "success" + "production"
+  // 2. Human message: mentions "production" and contains a Linear URL (manual release announcements)
+  const isDeployBot = (event.bot_id || event.subtype === "bot_message") &&
     fullText.includes("success") &&
     fullText.includes("production");
 
-  if (!isProductionSuccess) {
+  const isHumanRelease = !event.bot_id &&
+    fullText.includes("production") &&
+    fullText.includes("linear.app");
+
+  if (!isDeployBot && !isHumanRelease) {
     return NextResponse.json({ ok: true });
   }
 
   // Respond to Slack immediately (must be within 3 seconds)
-  waitUntil(processRelease(event, fullText));
+  waitUntil(processRelease(event, fullText, isHumanRelease));
   return NextResponse.json({ ok: true });
 }
 
@@ -157,7 +168,7 @@ async function getTicketsFromGitHub(fullText: string, attachText: string): Promi
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function processRelease(event: any, fullText: string) {
+async function processRelease(event: any, fullText: string, isHumanRelease = false) {
   const debugPost = async (msg: string) => {
     if (process.env.REVIEW_CHANNEL_ID) {
       const s = new WebClient(process.env.SLACK_BOT_TOKEN);
@@ -174,13 +185,21 @@ async function processRelease(event: any, fullText: string) {
       : attachText.includes("server") ? "server"
       : "web";
 
-    // Extract ticket IDs from GitHub commit history
+    // Extract ticket IDs — from Linear URLs (human message) or GitHub commits (deploy bot)
     let ticketIds: string[] = [];
     try {
-      ticketIds = await getTicketsFromGitHub(fullText, attachText);
-      await debugPost(`🔍 GitHub commits | project: ${project} | ticketIds: ${JSON.stringify(ticketIds)}`);
+      if (isHumanRelease) {
+        // Extract ticket IDs from Linear URLs in the message
+        // e.g. linear.app/system2/issue/s2-7507/some-title
+        const linearMatches = [...fullText.matchAll(/linear\.app\/[^/]+\/issue\/([a-z][a-z0-9]+-\d+)/gi)];
+        ticketIds = [...new Set(linearMatches.map(m => m[1].toUpperCase()))];
+        await debugPost(`🔍 Human release | ticketIds from Linear URLs: ${JSON.stringify(ticketIds)}`);
+      } else {
+        ticketIds = await getTicketsFromGitHub(fullText, attachText);
+        await debugPost(`🔍 GitHub commits | project: ${project} | ticketIds: ${JSON.stringify(ticketIds)}`);
+      }
     } catch (err) {
-      await debugPost(`❌ GitHub extraction error: ${String(err).slice(0, 200)}`);
+      await debugPost(`❌ Extraction error: ${String(err).slice(0, 200)}`);
       return;
     }
 
