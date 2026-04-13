@@ -157,11 +157,22 @@ async function getTicketsFromGitHub(fullText: string, attachText: string): Promi
 
   // Extract ticket IDs from commit messages
   const ticketIds = new Set<string>();
+  const commitMessages: string[] = [];
   for (const commit of compareData.commits ?? []) {
     const message: string = commit.commit?.message ?? "";
+    commitMessages.push(message.split("\n")[0].slice(0, 80)); // first line only for debug
     for (const match of message.matchAll(TICKET_ID_REGEX)) {
       ticketIds.add(match[1]);
     }
+  }
+
+  // Debug: log commit messages so we can see the format
+  if (process.env.REVIEW_CHANNEL_ID) {
+    const s = new WebClient(process.env.SLACK_BOT_TOKEN);
+    await s.chat.postMessage({
+      channel: process.env.REVIEW_CHANNEL_ID,
+      text: `🔍 Commits (${commitMessages.length}): ${commitMessages.slice(0, 5).map(m => `\`${m}\``).join(" | ")}`
+    });
   }
 
   return [...ticketIds];
