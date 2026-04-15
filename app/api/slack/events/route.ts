@@ -147,9 +147,25 @@ async function getTicketsFromGitHub(fullText: string, attachText: string): Promi
 
   const prevSha: string = prevRun.head_sha;
 
-  // Compare commits between previous and current SHA
+  // The production branch uses merge commits ("Merge branch 'master' into production").
+  // The actual feature commits with ticket IDs live on master, not production.
+  // Get the master SHA from each merge commit's second parent, then compare those.
+  async function getMasterSha(sha: string): Promise<string> {
+    const res = await fetch(`https://api.github.com/repos/${repo}/commits/${sha}`, { headers });
+    if (!res.ok) return sha;
+    const data = await res.json();
+    // Merge commit: parents[0] = prev production HEAD, parents[1] = master HEAD
+    return data.parents?.length >= 2 ? data.parents[1].sha : sha;
+  }
+
+  const [currentMasterSha, prevMasterSha] = await Promise.all([
+    getMasterSha(currentSha),
+    getMasterSha(prevSha),
+  ]);
+
+  // Compare master commits between the two deploys
   const compareRes = await fetch(
-    `https://api.github.com/repos/${repo}/compare/${prevSha}...${currentSha}`,
+    `https://api.github.com/repos/${repo}/compare/${prevMasterSha}...${currentMasterSha}`,
     { headers }
   );
   if (!compareRes.ok) throw new Error(`GitHub compare error: ${compareRes.status}`);
