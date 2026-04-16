@@ -194,6 +194,66 @@ async function getTicketsFromGitHub(fullText: string, attachText: string): Promi
   return [...ticketIds];
 }
 
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+const TICKET_ID_EXACT = /^[A-Z][A-Z0-9]+-\d+$/;
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function extractTicketsFromImage(event: any): Promise<string[]> {
+  // Find image file attached to this message or recent messages
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let file = event.files?.find((f: any) => f.mimetype?.startsWith("image/"));
+  if (!file) {
+    // Check channel history for nearby human message with image
+    const releasesChannelId = process.env.RELEASES_CHANNEL_ID || "C028K3WGYV7";
+    const history = await slack.conversations.history({
+      channel: releasesChannelId,
+      latest: event.ts,
+      limit: 5,
+      inclusive: true,
+    });
+    const msgWithImage = history.messages?.find(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (m: any) => m.files?.some((f: any) => f.mimetype?.startsWith("image/"))
+    );
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    file = msgWithImage?.files?.find((f: any) => f.mimetype?.startsWith("image/"));
+  }
+  if (!file?.url_private) return [];
+
+  const res = await fetch(file.url_private, {
+    headers: { Authorization: `Bearer ${process.env.SLACK_BOT_TOKEN}` }
+  });
+  if (!res.ok) return [];
+  const buffer = await res.arrayBuffer();
+  if (buffer.byteLength > MAX_IMAGE_BYTES) return [];
+
+  const imageBase64 = Buffer.from(buffer).toString("base64");
+  const imageMediaType = (file.mimetype as "image/png" | "image/jpeg" | "image/gif" | "image/webp") ?? "image/png";
+
+  const extractResponse = await anthropic.messages.create({
+    model: "claude-haiku-4-5-20251001",
+    max_tokens: 200,
+    messages: [{
+      role: "user",
+      content: [
+        { type: "image", source: { type: "base64", media_type: imageMediaType, data: imageBase64 } },
+        { type: "text", text: "Extract all Linear ticket IDs from this image (format like S2-1234 or AB-123). Return only a JSON array of strings, e.g. [\"S2-1234\", \"S2-5678\"]. If none found, return []." }
+      ]
+    }]
+  });
+
+  const text = extractResponse.content[0].type === "text" ? extractResponse.content[0].text : "[]";
+  try {
+    const match = text.match(/\[[\s\S]*\]/);
+    const parsed = JSON.parse(match ? match[0] : text);
+    return Array.isArray(parsed)
+      ? parsed.filter((id): id is string => typeof id === "string" && TICKET_ID_EXACT.test(id))
+      : [];
+  } catch {
+    return [];
+  }
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function processRelease(event: any, fullText: string, isHumanRelease = false) {
   const debugPost = async (msg: string) => {
@@ -212,15 +272,20 @@ async function processRelease(event: any, fullText: string, isHumanRelease = fal
       : attachText.includes("server") ? "server"
       : "web";
 
-    // Extract ticket IDs — from Linear URLs (human message) or GitHub commits (deploy bot)
+    // Extract ticket IDs — image (human) or GitHub commits (deploy bot)
     let ticketIds: string[] = [];
     try {
       if (isHumanRelease) {
-        // Extract ticket IDs from Linear URLs in the message
-        // e.g. linear.app/system2/issue/s2-7507/some-title
-        const linearMatches = [...fullText.matchAll(/linear\.app\/[^/]+\/issue\/([a-z][a-z0-9]+-\d+)/gi)];
-        ticketIds = [...new Set(linearMatches.map(m => m[1].toUpperCase()))];
-        await debugPost(`🔍 Human release | ticketIds from Linear URLs: ${JSON.stringify(ticketIds)}`);
+        // Try image extraction first (Santiago posts screenshots of commit list)
+        ticketIds = await extractTicketsFromImage(event);
+        if (ticketIds.length > 0) {
+          await debugPost(`🔍 Human release | ticketIds from image: ${JSON.stringify(ticketIds)}`);
+        } else {
+          // Fall back to Linear URLs in message text
+          const linearMatches = [...fullText.matchAll(/linear\.app\/[^/]+\/issue\/([a-z][a-z0-9]+-\d+)/gi)];
+          ticketIds = [...new Set(linearMatches.map(m => m[1].toUpperCase()))];
+          await debugPost(`🔍 Human release | ticketIds from Linear URLs: ${JSON.stringify(ticketIds)}`);
+        }
       } else {
         ticketIds = await getTicketsFromGitHub(fullText, attachText);
         await debugPost(`🔍 GitHub commits | project: ${project} | ticketIds: ${JSON.stringify(ticketIds)}`);
