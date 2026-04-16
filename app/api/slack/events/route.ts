@@ -62,21 +62,21 @@ export async function POST(request: NextRequest) {
     }));
   }
 
-  // Skip message_changed/file_share subtypes — only process original messages
-  if (event.subtype && event.subtype !== "bot_message") {
+  // Skip message_changed/deleted subtypes — allow file_share (human posts image)
+  if (event.subtype && event.subtype !== "bot_message" && event.subtype !== "file_share") {
     return NextResponse.json({ ok: true });
   }
 
   // Trigger on:
   // 1. Deploy bot: bot message with "success" + "production"
-  // 2. Human message: mentions "production" and contains a Linear URL (manual release announcements)
+  // 2. Human message: mentions "production" (may include image of commits)
   const isDeployBot = (event.bot_id || event.subtype === "bot_message") &&
     fullText.includes("success") &&
     fullText.includes("production");
 
   const isHumanRelease = !event.bot_id &&
     fullText.includes("production") &&
-    fullText.includes("linear.app");
+    (fullText.includes("linear.app") || event.files?.length > 0 || event.subtype === "file_share");
 
   if (!isDeployBot && !isHumanRelease) {
     return NextResponse.json({ ok: true });
