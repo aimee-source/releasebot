@@ -315,7 +315,6 @@ async function processRelease(event: any, fullText: string, isHumanRelease = fal
               title
               description
               startedAt
-              labels { nodes { name } }
               history(first: 50) {
                 nodes {
                   createdAt
@@ -329,21 +328,15 @@ async function processRelease(event: any, fullText: string, isHumanRelease = fal
     });
     if (!linearRes.ok) throw new Error(`Linear API error: ${linearRes.status}`);
     const linearData = await linearRes.json();
-    const allIssues: {
+    const issues: {
       identifier: string;
       title: string;
       description?: string;
       startedAt?: string;
-      labels?: { nodes: { name: string }[] };
       history?: { nodes: { createdAt: string; toState?: { name: string } }[] };
     }[] = linearData?.data?.issues?.nodes ?? [];
 
-    // Only track issues with the "feature" label
-    const issues = allIssues.filter(i =>
-      i.labels?.nodes?.some(l => l.name.toLowerCase() === "feature")
-    );
-
-    await debugPost(`🔍 Linear lookup | found ${allIssues.length} issue(s), ${issues.length} with "feature" label: ${issues.map(i => i.identifier).join(", ") || "none"}`);
+    await debugPost(`🔍 Linear lookup | found ${issues.length} issue(s): ${issues.map(i => i.identifier).join(", ") || "none"}`);
 
     if (issues.length === 0) return;
 
