@@ -340,30 +340,6 @@ async function processRelease(event: any, fullText: string, isHumanRelease = fal
 
     if (issues.length === 0) return;
 
-    // Push to engcal
-    if (process.env.ENGCAL_URL && process.env.ENGCAL_SECRET) {
-      await fetch(`${process.env.ENGCAL_URL}/api/add-release`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          secret: process.env.ENGCAL_SECRET,
-          releaseDate: Date.now(),
-          releases: issues.map(i => {
-            const inReviewEntry = i.history?.nodes.find(
-              h => h.toState?.name?.toLowerCase().includes("in review")
-            );
-            return {
-              ticketId: i.identifier,
-              title: i.title,
-              project,
-              ...(i.startedAt ? { startDate: new Date(i.startedAt).getTime() } : {}),
-              ...(inReviewEntry ? { demoDate: new Date(inReviewEntry.createdAt).getTime() } : {}),
-            };
-          }),
-        }),
-      }).catch(err => console.error("engcal push failed:", err));
-    }
-
     // Post one review card per ticket
     for (const issue of issues) {
       const linearContext = `${issue.identifier}: ${issue.title}${issue.description ? ` — ${issue.description.slice(0, 200)}` : ""}`;
