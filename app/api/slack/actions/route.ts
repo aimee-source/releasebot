@@ -103,7 +103,7 @@ export async function POST(request: NextRequest) {
     if (action?.action_id === "approve_release") {
       const { title, summary } = JSON.parse(action.value);
 
-      await slack.views.open({
+      const viewsResult = await slack.views.open({
         trigger_id: payload.trigger_id,
         view: {
           type: "modal",
@@ -159,6 +159,9 @@ export async function POST(request: NextRequest) {
           ]
         }
       });
+      if (!viewsResult.ok) {
+        await slack.chat.postMessage({ channel: process.env.REVIEW_CHANNEL_ID!, text: `❌ views.open failed: ${JSON.stringify(viewsResult.error)}` });
+      }
 
     } else if (action?.action_id === "reject_release") {
       await slack.chat.update({
