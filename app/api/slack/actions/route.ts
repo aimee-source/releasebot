@@ -72,11 +72,14 @@ export async function POST(request: NextRequest) {
           text: `${title} — ${summaryPlain}`,
           blocks: [
             {
+              // Bold the title by adding bold style to all text elements
               type: "rich_text",
-              elements: [{
-                type: "rich_text_section",
-                elements: [{ type: "text", text: title, style: { bold: true } }]
-              }]
+              elements: (titleRichText.elements ?? []).map((block: any) => ({
+                ...block,
+                elements: (block.elements ?? []).map((el: any) =>
+                  el.type === "text" ? { ...el, style: { ...(el.style ?? {}), bold: true } } : el
+                )
+              }))
             },
             summaryRichText
           ]
