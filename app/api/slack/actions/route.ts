@@ -35,10 +35,9 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: "Missing form fields" }, { status: 400 });
       }
 
-      // Optional image URLs (filter out empty/blank)
-      const imageUrl1 = payload.view?.state?.values?.image1_block?.image1_input?.value?.trim() || null;
-      const imageUrl2 = payload.view?.state?.values?.image2_block?.image2_input?.value?.trim() || null;
-      const imageUrls = [imageUrl1, imageUrl2].filter((u): u is string => !!u);
+      // Files uploaded via file_input
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const uploadedFiles: any[] = payload.view?.state?.values?.photos_block?.photos_input?.files ?? [];
 
       let metadata;
       try {
@@ -49,34 +48,38 @@ export async function POST(request: NextRequest) {
       }
       const { channelId, messageTs } = metadata;
 
-      // Build blocks for the post
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const postBlocks: any[] = [
-        {
-          type: "section",
-          text: {
-            type: "mrkdwn",
-            text: `*${title}*\n\n${summary}`
-          }
-        }
-      ];
-
-      for (const url of imageUrls) {
-        postBlocks.push({
-          type: "image",
-          image_url: url,
-          alt_text: title
-        });
-      }
-
       // Respond immediately to close the modal (Slack requires response within 3s)
-      // Do the actual posting in the background
       waitUntil((async () => {
+        // Post the text message
         await slack.chat.postMessage({
           channel: process.env.ASSISTANT_COACHES_CHANNEL_ID!,
           text: `${title} — ${summary}`,
-          blocks: postBlocks
+          blocks: [
+            {
+              type: "section",
+              text: { type: "mrkdwn", text: `*${title}*\n\n${summary}` }
+            }
+          ]
         });
+
+        // Upload any attached photos as follow-up messages
+        for (const file of uploadedFiles) {
+          try {
+            const fileRes = await fetch(file.url_private, {
+              headers: { Authorization: `Bearer ${process.env.SLACK_BOT_TOKEN}` }
+            });
+            const buffer = Buffer.from(await fileRes.arrayBuffer());
+            await slack.filesUploadV2({
+              channel_id: process.env.ASSISTANT_COACHES_CHANNEL_ID!,
+              file: buffer,
+              filename: file.name ?? "image.png",
+            });
+          } catch (fileErr) {
+            console.error("File upload error:", fileErr);
+          }
+        }
+
+        // Update the review card to show it was posted
         await slack.chat.update({
           channel: channelId,
           ts: messageTs,
@@ -137,25 +140,15 @@ export async function POST(request: NextRequest) {
               },
               {
                 type: "input",
-                block_id: "image1_block",
+                block_id: "photos_block",
                 optional: true,
                 element: {
-                  type: "plain_text_input",
-                  action_id: "image1_input",
-                  placeholder: { type: "plain_text", text: "Paste image URL (optional)" }
+                  type: "file_input",
+                  action_id: "photos_input",
+                  filetypes: ["jpg", "jpeg", "png", "gif", "webp"],
+                  max_files: 3
                 },
-                label: { type: "plain_text", text: "Photo 1 (optional)" }
-              },
-              {
-                type: "input",
-                block_id: "image2_block",
-                optional: true,
-                element: {
-                  type: "plain_text_input",
-                  action_id: "image2_input",
-                  placeholder: { type: "plain_text", text: "Paste image URL (optional)" }
-                },
-                label: { type: "plain_text", text: "Photo 2 (optional)" }
+                label: { type: "plain_text", text: "Photos (optional)" }
               }
             ]
           }
@@ -164,7 +157,7 @@ export async function POST(request: NextRequest) {
         const detail = viewsErr && typeof viewsErr === "object" && "data" in viewsErr
           ? JSON.stringify((viewsErr as { data: unknown }).data)
           : String(viewsErr);
-        await slack.chat.postMessage({ channel: process.env.REVIEW_CHANNEL_ID!, text: `❌ views.open error: ${detail}\ntrigger_id: ${payload.trigger_id}\ntitle length: ${title.length}\nsummary length: ${summary.length}` });
+        await slack.chat.postMessage({ channel: process.env.REVIEW_CHANNEL_ID!, text: `❌ views.open error: ${detail}` });
         throw viewsErr;
       }
 
