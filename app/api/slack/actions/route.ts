@@ -160,8 +160,11 @@ export async function POST(request: NextRequest) {
             ]
           }
         });
-      } catch (viewsErr) {
-        await slack.chat.postMessage({ channel: process.env.REVIEW_CHANNEL_ID!, text: `❌ views.open error: ${String(viewsErr)}` });
+      } catch (viewsErr: unknown) {
+        const detail = viewsErr && typeof viewsErr === "object" && "data" in viewsErr
+          ? JSON.stringify((viewsErr as { data: unknown }).data)
+          : String(viewsErr);
+        await slack.chat.postMessage({ channel: process.env.REVIEW_CHANNEL_ID!, text: `❌ views.open error: ${detail}\ntrigger_id: ${payload.trigger_id}\ntitle length: ${title.length}\nsummary length: ${summary.length}` });
         throw viewsErr;
       }
 
