@@ -42,12 +42,13 @@ export async function POST(request: NextRequest) {
   try {
     // Handle modal submission
     if (payload.type === "view_submission" && payload.view?.callback_id === "approve_modal") {
-      const title = payload.view?.state?.values?.title_block?.title_input?.value;
+      const titleRichText = payload.view?.state?.values?.title_block?.title_input?.rich_text_value;
       const summaryRichText = payload.view?.state?.values?.summary_block?.summary_input?.rich_text_value;
-      if (typeof title !== "string" || !summaryRichText) {
+      if (!titleRichText || !summaryRichText) {
         return NextResponse.json({ error: "Missing form fields" }, { status: 400 });
       }
 
+      const title = richTextToPlain(titleRichText);
       const summaryPlain = richTextToPlain(summaryRichText);
 
       // Files uploaded via file_input
@@ -71,8 +72,11 @@ export async function POST(request: NextRequest) {
           text: `${title} — ${summaryPlain}`,
           blocks: [
             {
-              type: "section",
-              text: { type: "mrkdwn", text: `*${title}*` }
+              type: "rich_text",
+              elements: [{
+                type: "rich_text_section",
+                elements: [{ type: "text", text: title, style: { bold: true } }]
+              }]
             },
             summaryRichText
           ]
@@ -138,9 +142,15 @@ export async function POST(request: NextRequest) {
                 type: "input",
                 block_id: "title_block",
                 element: {
-                  type: "plain_text_input",
+                  type: "rich_text_input",
                   action_id: "title_input",
-                  initial_value: title
+                  initial_value: {
+                    type: "rich_text",
+                    elements: [{
+                      type: "rich_text_section",
+                      elements: [{ type: "text", text: title }]
+                    }]
+                  }
                 },
                 label: { type: "plain_text", text: "Title" }
               },
