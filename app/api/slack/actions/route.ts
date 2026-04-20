@@ -110,7 +110,7 @@ export async function POST(request: NextRequest) {
             type: "modal",
             callback_id: "approve_modal",
             title: { type: "plain_text", text: "Edit & Post Release" },
-            submit: { type: "plain_text", text: "Post to #assistant-coaches" },
+            submit: { type: "plain_text", text: "Post to Coaches" },
             close: { type: "plain_text", text: "Cancel" },
             private_metadata: JSON.stringify({ channelId, messageTs }),
             blocks: [
