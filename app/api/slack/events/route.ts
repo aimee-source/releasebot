@@ -54,14 +54,6 @@ export async function POST(request: NextRequest) {
   const attachmentText = (event.attachments ?? []).map((a: any) => `${a.text ?? ""} ${a.fallback ?? ""} ${a.pretext ?? ""}`).join(" ");
   const fullText = `${event.text ?? ""} ${attachmentText}`.toLowerCase();
 
-  // DEBUG: post raw event info to review channel
-  if (process.env.REVIEW_CHANNEL_ID) {
-    waitUntil(slack.chat.postMessage({
-      channel: process.env.REVIEW_CHANNEL_ID,
-      text: `🔍 #releases event | bot_id: \`${event.bot_id ?? "none"}\` | subtype: \`${event.subtype ?? "none"}\` | fullText: ${fullText.slice(0, 200)}`
-    }));
-  }
-
   // Skip message_changed/deleted subtypes — allow file_share (human posts image)
   if (event.subtype && event.subtype !== "bot_message" && event.subtype !== "file_share") {
     return NextResponse.json({ ok: true });
@@ -183,15 +175,6 @@ async function getTicketsFromGitHub(fullText: string, attachText: string): Promi
     }
   }
 
-  // Debug: log commit messages so we can see the format
-  if (process.env.REVIEW_CHANNEL_ID) {
-    const s = new WebClient(process.env.SLACK_BOT_TOKEN);
-    await s.chat.postMessage({
-      channel: process.env.REVIEW_CHANNEL_ID,
-      text: `🔍 Commits (${commitMessages.length}): ${commitMessages.slice(0, 5).map(m => `\`${m}\``).join(" | ")}`
-    });
-  }
-
   return [...ticketIds];
 }
 
@@ -265,13 +248,8 @@ async function processRelease(event: any, fullText: string, isHumanRelease = fal
   };
 
   try {
-    // Detect project from deploy bot text
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const attachText = (event.attachments ?? []).map((a: any) => `${a.text ?? ""} ${a.fallback ?? ""}`).join(" ").toLowerCase();
-    const project = attachText.includes("mobile") ? "mobile"
-      : attachText.includes("function") ? "functions"
-      : attachText.includes("server") ? "server"
-      : "web";
 
     // Extract ticket IDs — image (human) or GitHub commits (deploy bot)
     let ticketIds: string[] = [];
@@ -279,27 +257,20 @@ async function processRelease(event: any, fullText: string, isHumanRelease = fal
       if (isHumanRelease) {
         // Try image extraction first (Santiago posts screenshots of commit list)
         ticketIds = await extractTicketsFromImage(event);
-        if (ticketIds.length > 0) {
-          await debugPost(`🔍 Human release | ticketIds from image: ${JSON.stringify(ticketIds)}`);
-        } else {
+        if (ticketIds.length === 0) {
           // Fall back to Linear URLs in message text
           const linearMatches = [...fullText.matchAll(/linear\.app\/[^/]+\/issue\/([a-z][a-z0-9]+-\d+)/gi)];
           ticketIds = [...new Set(linearMatches.map(m => m[1].toUpperCase()))];
-          await debugPost(`🔍 Human release | ticketIds from Linear URLs: ${JSON.stringify(ticketIds)}`);
         }
       } else {
         ticketIds = await getTicketsFromGitHub(fullText, attachText);
-        await debugPost(`🔍 GitHub commits | project: ${project} | ticketIds: ${JSON.stringify(ticketIds)}`);
       }
     } catch (err) {
       await debugPost(`❌ Extraction error: ${String(err).slice(0, 200)}`);
       return;
     }
 
-    if (ticketIds.length === 0) {
-      await debugPost(`⚠️ No ticket IDs found in commit messages for project: ${project}`);
-      return;
-    }
+    if (ticketIds.length === 0) return;
 
     // Look up tickets in Linear
     const linearRes = await fetch("https://api.linear.app/graphql", {
@@ -336,8 +307,6 @@ async function processRelease(event: any, fullText: string, isHumanRelease = fal
       startedAt?: string;
       history?: { nodes: { createdAt: string; toState?: { name: string } }[] };
     }[] = linearData?.data?.issues?.nodes ?? [];
-
-    await debugPost(`🔍 Linear lookup | found ${issues.length} issue(s): ${issues.map(i => i.identifier).join(", ") || "none"}`);
 
     if (issues.length === 0) return;
 
@@ -407,16 +376,10 @@ Respond only with JSON: {"title": "...", "summary": "..."}`
         elements: [
           {
             type: "button",
-            text: { type: "plain_text", text: "✏️ → #assistant-coaches" },
+            text: { type: "plain_text", text: "✏️ Edit & Post" },
             style: "primary",
-            action_id: "approve_release",
-            value: JSON.stringify({ title, summary, targetChannel: process.env.ASSISTANT_COACHES_CHANNEL_ID, targetName: "assistant-coaches" })
-          },
-          {
-            type: "button",
-            text: { type: "plain_text", text: "✏️ → #inside-sales" },
-            action_id: "approve_release_is",
-            value: JSON.stringify({ title, summary, targetChannel: process.env.INSIDE_SALES_CHANNEL_ID, targetName: "inside-sales" })
+            action_id: "edit_release",
+            value: JSON.stringify({ title, summary })
           },
           {
             type: "button",
