@@ -119,6 +119,22 @@ export async function POST(request: NextRequest) {
             }
           ]
         });
+
+        // Update engcal release date for this ticket
+        if (metadata.ticketId && process.env.ENGCAL_SECRET) {
+          try {
+            await fetch("https://engcal.vercel.app/api/add-release", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                secret: process.env.ENGCAL_SECRET,
+                releases: [{ ticketId: metadata.ticketId, releaseDate: Date.now() }]
+              })
+            });
+          } catch (engcalErr) {
+            console.error("engcal update failed:", engcalErr);
+          }
+        }
       })());
 
       return NextResponse.json({});
@@ -129,7 +145,7 @@ export async function POST(request: NextRequest) {
     const messageTs: string = payload.container?.message_ts;
 
     if (action?.action_id === "edit_release") {
-      const { title, summary } = JSON.parse(action.value);
+      const { title, summary, ticketId } = JSON.parse(action.value);
 
       const channelOptions = [
         { text: { type: "plain_text" as const, text: "#assistant-coaches" }, value: `${process.env.ASSISTANT_COACHES_CHANNEL_ID}|assistant-coaches` },
@@ -146,7 +162,7 @@ export async function POST(request: NextRequest) {
             title: { type: "plain_text", text: "Edit & Post Release" },
             submit: { type: "plain_text", text: "Post" },
             close: { type: "plain_text", text: "Cancel" },
-            private_metadata: JSON.stringify({ channelId, messageTs }),
+            private_metadata: JSON.stringify({ channelId, messageTs, ticketId }),
             blocks: [
               {
                 type: "input",

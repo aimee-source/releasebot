@@ -379,7 +379,7 @@ Respond only with JSON: {"title": "...", "summary": "..."}`
             text: { type: "plain_text", text: "✏️ Edit & Post" },
             style: "primary",
             action_id: "edit_release",
-            value: JSON.stringify({ title, summary })
+            value: JSON.stringify({ title, summary, ticketId: issue?.identifier ?? null })
           },
           {
             type: "button",
