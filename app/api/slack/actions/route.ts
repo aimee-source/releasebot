@@ -103,64 +103,66 @@ export async function POST(request: NextRequest) {
     if (action?.action_id === "approve_release") {
       const { title, summary } = JSON.parse(action.value);
 
-      const viewsResult = await slack.views.open({
-        trigger_id: payload.trigger_id,
-        view: {
-          type: "modal",
-          callback_id: "approve_modal",
-          title: { type: "plain_text", text: "Edit & Post Release" },
-          submit: { type: "plain_text", text: "Post to #assistant-coaches" },
-          close: { type: "plain_text", text: "Cancel" },
-          private_metadata: JSON.stringify({ channelId, messageTs }),
-          blocks: [
-            {
-              type: "input",
-              block_id: "title_block",
-              element: {
-                type: "plain_text_input",
-                action_id: "title_input",
-                initial_value: title
+      try {
+        await slack.views.open({
+          trigger_id: payload.trigger_id,
+          view: {
+            type: "modal",
+            callback_id: "approve_modal",
+            title: { type: "plain_text", text: "Edit & Post Release" },
+            submit: { type: "plain_text", text: "Post to #assistant-coaches" },
+            close: { type: "plain_text", text: "Cancel" },
+            private_metadata: JSON.stringify({ channelId, messageTs }),
+            blocks: [
+              {
+                type: "input",
+                block_id: "title_block",
+                element: {
+                  type: "plain_text_input",
+                  action_id: "title_input",
+                  initial_value: title
+                },
+                label: { type: "plain_text", text: "Title" }
               },
-              label: { type: "plain_text", text: "Title" }
-            },
-            {
-              type: "input",
-              block_id: "summary_block",
-              element: {
-                type: "plain_text_input",
-                action_id: "summary_input",
-                multiline: true,
-                initial_value: summary
+              {
+                type: "input",
+                block_id: "summary_block",
+                element: {
+                  type: "plain_text_input",
+                  action_id: "summary_input",
+                  multiline: true,
+                  initial_value: summary
+                },
+                label: { type: "plain_text", text: "Message" }
               },
-              label: { type: "plain_text", text: "Message" }
-            },
-            {
-              type: "input",
-              block_id: "image1_block",
-              optional: true,
-              element: {
-                type: "plain_text_input",
-                action_id: "image1_input",
-                placeholder: { type: "plain_text", text: "Paste image URL (optional)" }
+              {
+                type: "input",
+                block_id: "image1_block",
+                optional: true,
+                element: {
+                  type: "plain_text_input",
+                  action_id: "image1_input",
+                  placeholder: { type: "plain_text", text: "Paste image URL (optional)" }
+                },
+                label: { type: "plain_text", text: "Photo 1 (optional)" }
               },
-              label: { type: "plain_text", text: "Photo 1 (optional)" }
-            },
-            {
-              type: "input",
-              block_id: "image2_block",
-              optional: true,
-              element: {
-                type: "plain_text_input",
-                action_id: "image2_input",
-                placeholder: { type: "plain_text", text: "Paste image URL (optional)" }
-              },
-              label: { type: "plain_text", text: "Photo 2 (optional)" }
-            }
-          ]
-        }
-      });
-      if (!viewsResult.ok) {
-        await slack.chat.postMessage({ channel: process.env.REVIEW_CHANNEL_ID!, text: `❌ views.open failed: ${JSON.stringify(viewsResult.error)}` });
+              {
+                type: "input",
+                block_id: "image2_block",
+                optional: true,
+                element: {
+                  type: "plain_text_input",
+                  action_id: "image2_input",
+                  placeholder: { type: "plain_text", text: "Paste image URL (optional)" }
+                },
+                label: { type: "plain_text", text: "Photo 2 (optional)" }
+              }
+            ]
+          }
+        });
+      } catch (viewsErr) {
+        await slack.chat.postMessage({ channel: process.env.REVIEW_CHANNEL_ID!, text: `❌ views.open error: ${String(viewsErr)}` });
+        throw viewsErr;
       }
 
     } else if (action?.action_id === "reject_release") {
