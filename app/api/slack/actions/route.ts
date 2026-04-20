@@ -68,6 +68,7 @@ export async function POST(request: NextRequest) {
             const fileRes = await fetch(file.url_private, {
               headers: { Authorization: `Bearer ${process.env.SLACK_BOT_TOKEN}` }
             });
+            if (!fileRes.ok) throw new Error(`Download failed: ${fileRes.status}`);
             const buffer = Buffer.from(await fileRes.arrayBuffer());
             await slack.filesUploadV2({
               channel_id: process.env.ASSISTANT_COACHES_CHANNEL_ID!,
@@ -75,7 +76,7 @@ export async function POST(request: NextRequest) {
               filename: file.name ?? "image.png",
             });
           } catch (fileErr) {
-            console.error("File upload error:", fileErr);
+            await slack.chat.postMessage({ channel: process.env.REVIEW_CHANNEL_ID!, text: `❌ Photo upload error: ${String(fileErr)}\nfile keys: ${Object.keys(file).join(", ")}` });
           }
         }
 
