@@ -7,6 +7,19 @@ export const maxDuration = 60;
 
 const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
 
+// Extract plain text from a rich_text block for fallback text
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function richTextToPlain(richText: any): string {
+  return (richText?.elements ?? []).flatMap((block: any) =>
+    (block.elements ?? []).map((el: any) => {
+      if (el.type === "text") return el.text;
+      if (el.type === "emoji") return `:${el.name}:`;
+      if (el.type === "link") return el.text ?? el.url;
+      return "";
+    })
+  ).join("");
+}
+
 export async function POST(request: NextRequest) {
   const rawBody = await request.text();
   const signature = request.headers.get("x-slack-signature") ?? "";
@@ -30,10 +43,12 @@ export async function POST(request: NextRequest) {
     // Handle modal submission
     if (payload.type === "view_submission" && payload.view?.callback_id === "approve_modal") {
       const title = payload.view?.state?.values?.title_block?.title_input?.value;
-      const summary = payload.view?.state?.values?.summary_block?.summary_input?.value;
-      if (typeof title !== "string" || typeof summary !== "string") {
+      const summaryRichText = payload.view?.state?.values?.summary_block?.summary_input?.rich_text_value;
+      if (typeof title !== "string" || !summaryRichText) {
         return NextResponse.json({ error: "Missing form fields" }, { status: 400 });
       }
+
+      const summaryPlain = richTextToPlain(summaryRichText);
 
       // Files uploaded via file_input
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -50,15 +65,16 @@ export async function POST(request: NextRequest) {
 
       // Respond immediately to close the modal (Slack requires response within 3s)
       waitUntil((async () => {
-        // Post the text message
+        // Post the message — bold title as section, rich text body preserving emojis/formatting
         await slack.chat.postMessage({
           channel: process.env.ASSISTANT_COACHES_CHANNEL_ID!,
-          text: `${title} — ${summary}`,
+          text: `${title} — ${summaryPlain}`,
           blocks: [
             {
               type: "section",
-              text: { type: "mrkdwn", text: `*${title}*\n\n${summary}` }
-            }
+              text: { type: "mrkdwn", text: `*${title}*` }
+            },
+            summaryRichText
           ]
         });
 
@@ -90,7 +106,7 @@ export async function POST(request: NextRequest) {
               type: "section",
               text: {
                 type: "mrkdwn",
-                text: `✅ *Posted to #assistant-coaches*\n\n*${title}*\n\n${summary}`
+                text: `✅ *Posted to #assistant-coaches*\n\n*${title}*\n\n${summaryPlain}`
               }
             }
           ]
@@ -132,10 +148,15 @@ export async function POST(request: NextRequest) {
                 type: "input",
                 block_id: "summary_block",
                 element: {
-                  type: "plain_text_input",
+                  type: "rich_text_input",
                   action_id: "summary_input",
-                  multiline: true,
-                  initial_value: summary
+                  initial_value: {
+                    type: "rich_text",
+                    elements: [{
+                      type: "rich_text_section",
+                      elements: [{ type: "text", text: summary }]
+                    }]
+                  }
                 },
                 label: { type: "plain_text", text: "Message" }
               },
