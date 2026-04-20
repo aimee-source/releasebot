@@ -167,10 +167,10 @@ export async function POST(request: NextRequest) {
                 element: {
                   type: "file_input",
                   action_id: "photos_input",
-                  filetypes: ["jpg", "jpeg", "png", "gif", "webp"],
+                  filetypes: ["jpg", "jpeg", "png", "gif", "webp", "mp4", "mov", "webm"],
                   max_files: 3
                 },
-                label: { type: "plain_text", text: "Photos (optional)" }
+                label: { type: "plain_text", text: "Photos & Videos (optional)" }
               }
             ]
           }
