@@ -407,10 +407,16 @@ Respond only with JSON: {"title": "...", "summary": "..."}`
         elements: [
           {
             type: "button",
-            text: { type: "plain_text", text: "✏️ Edit & Post" },
+            text: { type: "plain_text", text: "✏️ → #assistant-coaches" },
             style: "primary",
             action_id: "approve_release",
-            value: JSON.stringify({ title, summary })
+            value: JSON.stringify({ title, summary, targetChannel: process.env.ASSISTANT_COACHES_CHANNEL_ID, targetName: "assistant-coaches" })
+          },
+          {
+            type: "button",
+            text: { type: "plain_text", text: "✏️ → #inside-sales" },
+            action_id: "approve_release_is",
+            value: JSON.stringify({ title, summary, targetChannel: process.env.INSIDE_SALES_CHANNEL_ID, targetName: "inside-sales" })
           },
           {
             type: "button",

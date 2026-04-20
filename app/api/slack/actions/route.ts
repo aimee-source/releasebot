@@ -62,13 +62,14 @@ export async function POST(request: NextRequest) {
       } catch {
         return NextResponse.json({ error: "Invalid form state" }, { status: 400 });
       }
-      const { channelId, messageTs } = metadata;
+      const { channelId, messageTs, targetChannel: postChannel, targetName: postName } = metadata;
+      const destination = postChannel ?? process.env.ASSISTANT_COACHES_CHANNEL_ID!;
 
       // Respond immediately to close the modal (Slack requires response within 3s)
       waitUntil((async () => {
         // Post the message — bold title as section, rich text body preserving emojis/formatting
         await slack.chat.postMessage({
-          channel: process.env.ASSISTANT_COACHES_CHANNEL_ID!,
+          channel: destination,
           text: `${title} — ${summaryPlain}`,
           blocks: [
             {
@@ -94,7 +95,7 @@ export async function POST(request: NextRequest) {
             if (!fileRes.ok) throw new Error(`Download failed: ${fileRes.status}`);
             const buffer = Buffer.from(await fileRes.arrayBuffer());
             await slack.filesUploadV2({
-              channel_id: process.env.ASSISTANT_COACHES_CHANNEL_ID!,
+              channel_id: destination,
               file: buffer,
               filename: file.name ?? "image.png",
             });
@@ -107,13 +108,13 @@ export async function POST(request: NextRequest) {
         await slack.chat.update({
           channel: channelId,
           ts: messageTs,
-          text: `✅ Posted to #assistant-coaches`,
+          text: `✅ Posted to #${postName ?? "assistant-coaches"}`,
           blocks: [
             {
               type: "section",
               text: {
                 type: "mrkdwn",
-                text: `✅ *Posted to #assistant-coaches*\n\n*${title}*\n\n${summaryPlain}`
+                text: `✅ *Posted to #${postName ?? "assistant-coaches"}*\n\n*${title}*\n\n${summaryPlain}`
               }
             }
           ]
@@ -127,8 +128,8 @@ export async function POST(request: NextRequest) {
     const channelId: string = payload.container?.channel_id;
     const messageTs: string = payload.container?.message_ts;
 
-    if (action?.action_id === "approve_release") {
-      const { title, summary } = JSON.parse(action.value);
+    if (action?.action_id === "approve_release" || action?.action_id === "approve_release_is") {
+      const { title, summary, targetChannel, targetName } = JSON.parse(action.value);
 
       try {
         await slack.views.open({
@@ -137,9 +138,9 @@ export async function POST(request: NextRequest) {
             type: "modal",
             callback_id: "approve_modal",
             title: { type: "plain_text", text: "Edit & Post Release" },
-            submit: { type: "plain_text", text: "→ #assistant-coaches" },
+            submit: { type: "plain_text", text: `→ #${targetName ?? "assistant-coaches"}` },
             close: { type: "plain_text", text: "Cancel" },
-            private_metadata: JSON.stringify({ channelId, messageTs }),
+            private_metadata: JSON.stringify({ channelId, messageTs, targetChannel, targetName }),
             blocks: [
               {
                 type: "input",
