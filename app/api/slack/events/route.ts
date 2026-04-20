@@ -74,9 +74,10 @@ export async function POST(request: NextRequest) {
     fullText.includes("success") &&
     fullText.includes("production");
 
+  // Human release: image post (screenshot of commits) OR Linear URL — no "production" required
+  // since this bot only listens to the dedicated releases channel
   const isHumanRelease = !event.bot_id &&
-    fullText.includes("production") &&
-    (fullText.includes("linear.app") || event.files?.length > 0 || event.subtype === "file_share");
+    (event.files?.length > 0 || event.subtype === "file_share" || fullText.includes("linear.app"));
 
   if (!isDeployBot && !isHumanRelease) {
     return NextResponse.json({ ok: true });
