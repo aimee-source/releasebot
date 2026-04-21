@@ -287,6 +287,7 @@ async function processRelease(event: any, fullText: string, isHumanRelease = fal
               title
               description
               startedAt
+              labels { nodes { name } }
               history(first: 50) {
                 nodes {
                   createdAt
@@ -305,6 +306,7 @@ async function processRelease(event: any, fullText: string, isHumanRelease = fal
       title: string;
       description?: string;
       startedAt?: string;
+      labels?: { nodes: { name: string }[] };
       history?: { nodes: { createdAt: string; toState?: { name: string } }[] };
     }[] = linearData?.data?.issues?.nodes ?? [];
 
@@ -312,8 +314,9 @@ async function processRelease(event: any, fullText: string, isHumanRelease = fal
 
     // Post one review card per ticket
     for (const issue of issues) {
+      const labelNames = issue.labels?.nodes?.map(l => l.name) ?? [];
       const linearContext = `${issue.identifier}: ${issue.title}${issue.description ? ` — ${issue.description.slice(0, 200)}` : ""}`;
-      await postReviewCard({ issue, linearContext });
+      await postReviewCard({ issue, linearContext, labelNames });
     }
 
   } catch (err) {
@@ -325,10 +328,18 @@ async function processRelease(event: any, fullText: string, isHumanRelease = fal
 async function postReviewCard({
   issue,
   linearContext,
+  labelNames = [],
 }: {
   issue: { identifier: string; title: string; description?: string } | null;
   linearContext: string;
+  labelNames?: string[];
 }) {
+  const isBug = labelNames.some(l => l.toLowerCase() === "bug");
+  const isNewFeature = labelNames.some(l => l.toLowerCase() === "feature" || l.toLowerCase() === "new feature");
+  const isImprovement = labelNames.some(l => l.toLowerCase() === "improvement");
+  const labelPrefix = isBug ? "🐛 Bug Fix: " : isNewFeature ? "✨ New Feature: " : isImprovement ? "🔧 Improvement: " : "";
+  const labelContext = isBug ? "bug fix" : isNewFeature ? "new feature" : isImprovement ? "improvement" : "update";
+
   let title = issue ? issue.title : "New Release";
   let summary = linearContext;
 
@@ -338,10 +349,10 @@ async function postReviewCard({
       max_tokens: 300,
       messages: [{
         role: "user",
-        content: `You are summarizing a software release note for assistant coaches at a fitness coaching company called Avida.
+        content: `You are summarizing a software ${labelContext} release note for assistant coaches at a fitness coaching company called Avida.
 ${linearContext ? `\nLinear ticket details:\n${linearContext}` : ""}
 
-Generate a clean title (5–8 words, no technical jargon or ticket numbers) and a 1–2 sentence plain English summary that an assistant coach would understand and find relevant.
+Generate a clean title (5–8 words, no technical jargon or ticket numbers) and a 1–2 sentence plain English summary that an assistant coach would understand and find relevant. Write the summary in the tone of a ${labelContext}.
 
 Respond only with JSON: {"title": "...", "summary": "..."}`
       }]
@@ -351,7 +362,7 @@ Respond only with JSON: {"title": "...", "summary": "..."}`
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : text);
     if (typeof parsed.title === "string" && typeof parsed.summary === "string") {
-      title = parsed.title;
+      title = `${labelPrefix}${parsed.title}`;
       summary = parsed.summary;
     }
   } catch (err) {
