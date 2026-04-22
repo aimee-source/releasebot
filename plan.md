@@ -23,6 +23,7 @@ Listens for messages in `#releases`, uses Claude to generate a coach-friendly ti
 - `#assistant-coaches` — `ASSISTANT_COACHES_CHANNEL_ID` (`C03T016QKUJ`)
 - `#inside-sales` — `INSIDE_SALES_CHANNEL_ID` (`C046LEL8HJ6`)
 - `#cam-cross-functional` — `CAM_CHANNEL_ID` (`C02MZKL6K1A`)
+- `#support-ops` — `SUPPORT_OPS_CHANNEL_ID` (`C09KCRW3Y6S`)
 
 ## Engcal integration
 On modal submission, calls `https://engcal.vercel.app/api/add-release` with the ticket ID and current timestamp to set `releaseDate`. Requires `ENGCAL_SECRET` env var.
