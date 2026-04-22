@@ -59,24 +59,17 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: true });
   }
 
-  // Trigger on:
-  // 1. Deploy bot: bot message with "success" + "production"
-  // 2. Human message: mentions "production" (may include image of commits)
+  // Only trigger on deploy bot success message
   const isDeployBot = (event.bot_id || event.subtype === "bot_message") &&
     fullText.includes("success") &&
     fullText.includes("production");
 
-  // Human release: image post (screenshot of commits) OR Linear URL — no "production" required
-  // since this bot only listens to the dedicated releases channel
-  const isHumanRelease = !event.bot_id &&
-    (event.files?.length > 0 || event.subtype === "file_share" || fullText.includes("linear.app"));
-
-  if (!isDeployBot && !isHumanRelease) {
+  if (!isDeployBot) {
     return NextResponse.json({ ok: true });
   }
 
   // Respond to Slack immediately (must be within 3 seconds)
-  waitUntil(processRelease(event, fullText, isHumanRelease));
+  waitUntil(processRelease(event, fullText, false));
   return NextResponse.json({ ok: true });
 }
 
