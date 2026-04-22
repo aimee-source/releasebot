@@ -38,9 +38,10 @@ lib/
 2. Filters to `#releases` channel only (`RELEASES_CHANNEL_ID`)
 3. Detects deploy bot success (bot message with "success" + "production") or human post (image/Linear URL)
 4. Extracts ticket IDs: image → Claude vision scan, OR Linear URLs in text, OR GitHub commits API
-5. Looks up tickets in Linear GraphQL API
+5. Looks up tickets in Linear GraphQL API (including labels)
 6. Calls Claude Haiku to generate title + summary
-7. Posts review card to `#releasebotreview` with **Edit & Post** + **Reject** buttons
+7. Prefixes title with label emoji: 🐛 Bug Fix / ✨ New Feature / 🔧 Improvement (empty prefix if unlabeled)
+8. Posts review card to `#releasebotreview` with **Edit & Post** + **Reject** buttons
 
 ### actions/route.ts
 - `edit_release` button → opens modal with:
