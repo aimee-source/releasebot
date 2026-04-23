@@ -59,17 +59,16 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: true });
   }
 
-  // Only trigger on deploy bot success message
-  const isDeployBot = (event.bot_id || event.subtype === "bot_message") &&
-    fullText.includes("success") &&
-    fullText.includes("production");
+  // Only trigger on human photo post (image/file share or Linear URL)
+  const isHumanRelease = !event.bot_id &&
+    (event.files?.length > 0 || event.subtype === "file_share" || fullText.includes("linear.app"));
 
-  if (!isDeployBot) {
+  if (!isHumanRelease) {
     return NextResponse.json({ ok: true });
   }
 
   // Respond to Slack immediately (must be within 3 seconds)
-  waitUntil(processRelease(event, fullText, false));
+  waitUntil(processRelease(event, fullText, true));
   return NextResponse.json({ ok: true });
 }
 
