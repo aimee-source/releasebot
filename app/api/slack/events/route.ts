@@ -175,11 +175,11 @@ const TICKET_ID_EXACT = /^[A-Z][A-Z0-9]+-\d+$/;
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function extractTicketsFromImage(event: any): Promise<string[]> {
-  // Find image file attached to this message or recent messages
+  // Collect all image files from this message
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let file = event.files?.find((f: any) => f.mimetype?.startsWith("image/"));
-  if (!file) {
-    // Check channel history for nearby human message with image
+  let files: any[] = (event.files ?? []).filter((f: any) => f.mimetype?.startsWith("image/"));
+  if (files.length === 0) {
+    // Check channel history for nearby human message with images
     const releasesChannelId = process.env.RELEASES_CHANNEL_ID || "C028K3WGYV7";
     const history = await slack.conversations.history({
       channel: releasesChannelId,
@@ -192,42 +192,48 @@ async function extractTicketsFromImage(event: any): Promise<string[]> {
       (m: any) => m.files?.some((f: any) => f.mimetype?.startsWith("image/"))
     );
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    file = msgWithImage?.files?.find((f: any) => f.mimetype?.startsWith("image/"));
+    files = (msgWithImage?.files ?? []).filter((f: any) => f.mimetype?.startsWith("image/"));
   }
-  if (!file?.url_private) return [];
+  if (files.length === 0) return [];
 
-  const res = await fetch(file.url_private, {
-    headers: { Authorization: `Bearer ${process.env.SLACK_BOT_TOKEN}` }
-  });
-  if (!res.ok) return [];
-  const buffer = await res.arrayBuffer();
-  if (buffer.byteLength > MAX_IMAGE_BYTES) return [];
+  // Extract ticket IDs from all images in parallel, then deduplicate
+  const allIds = await Promise.all(files.map(async (file) => {
+    if (!file.url_private) return [];
+    const res = await fetch(file.url_private, {
+      headers: { Authorization: `Bearer ${process.env.SLACK_BOT_TOKEN}` }
+    });
+    if (!res.ok) return [];
+    const buffer = await res.arrayBuffer();
+    if (buffer.byteLength > MAX_IMAGE_BYTES) return [];
 
-  const imageBase64 = Buffer.from(buffer).toString("base64");
-  const imageMediaType = (file.mimetype as "image/png" | "image/jpeg" | "image/gif" | "image/webp") ?? "image/png";
+    const imageBase64 = Buffer.from(buffer).toString("base64");
+    const imageMediaType = (file.mimetype as "image/png" | "image/jpeg" | "image/gif" | "image/webp") ?? "image/png";
 
-  const extractResponse = await anthropic.messages.create({
-    model: "claude-haiku-4-5-20251001",
-    max_tokens: 200,
-    messages: [{
-      role: "user",
-      content: [
-        { type: "image", source: { type: "base64", media_type: imageMediaType, data: imageBase64 } },
-        { type: "text", text: "Extract all Linear ticket IDs from this image (format like S2-1234 or AB-123). Return only a JSON array of strings, e.g. [\"S2-1234\", \"S2-5678\"]. If none found, return []." }
-      ]
-    }]
-  });
+    const extractResponse = await anthropic.messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 200,
+      messages: [{
+        role: "user",
+        content: [
+          { type: "image", source: { type: "base64", media_type: imageMediaType, data: imageBase64 } },
+          { type: "text", text: "Extract all Linear ticket IDs from this image (format like S2-1234 or AB-123). Return only a JSON array of strings, e.g. [\"S2-1234\", \"S2-5678\"]. If none found, return []." }
+        ]
+      }]
+    });
 
-  const text = extractResponse.content[0].type === "text" ? extractResponse.content[0].text : "[]";
-  try {
-    const match = text.match(/\[[\s\S]*\]/);
-    const parsed = JSON.parse(match ? match[0] : text);
-    return Array.isArray(parsed)
-      ? parsed.filter((id): id is string => typeof id === "string" && TICKET_ID_EXACT.test(id))
-      : [];
-  } catch {
-    return [];
-  }
+    const text = extractResponse.content[0].type === "text" ? extractResponse.content[0].text : "[]";
+    try {
+      const match = text.match(/\[[\s\S]*\]/);
+      const parsed = JSON.parse(match ? match[0] : text);
+      return Array.isArray(parsed)
+        ? parsed.filter((id): id is string => typeof id === "string" && TICKET_ID_EXACT.test(id))
+        : [];
+    } catch {
+      return [];
+    }
+  }));
+
+  return [...new Set(allIds.flat())];
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
