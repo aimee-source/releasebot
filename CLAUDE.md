@@ -36,7 +36,7 @@ lib/
 ### events/route.ts
 1. Verifies Slack signature
 2. Filters to `#releases` channel only (`RELEASES_CHANNEL_ID`)
-3. Detects deploy bot success (bot message with "success" + "production") or human post (image/Linear URL)
+3. Detects human post: image/file share in `#releases` (deploy bot messages intentionally ignored — caused duplicate review cards)
 4. Extracts ticket IDs: image → Claude vision scan, OR Linear URLs in text, OR GitHub commits API
 5. Looks up tickets in Linear GraphQL API (including labels)
 6. Calls Claude Haiku to generate title + summary
@@ -45,7 +45,7 @@ lib/
 
 ### actions/route.ts
 - `edit_release` button → opens modal with:
-  - Radio button channel selector (AC / IS / CAM)
+  - Radio button channel selector (AC / IS / CAM / support-ops)
   - Rich text title input (emoji support)
   - Rich text message input (emoji support)
   - File input for photos/videos (max 3)

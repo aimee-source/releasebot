@@ -12,8 +12,7 @@ Listens for messages in `#releases`, uses Claude to generate a coach-friendly ti
 6. **Reject**: updates review card to ❌
 
 ## Trigger conditions
-- **Deploy bot**: bot message with "success" + "production" in `#releases`
-- **Human post**: any image/file share OR Linear URL in `#releases`
+- **Human post only**: image/file share in `#releases` (deploy bot success messages no longer trigger — caused duplicate cards)
 
 ## Routes
 - `POST /api/slack/events` — handles incoming Slack messages + URL verification
@@ -47,12 +46,13 @@ On modal submission, calls `https://engcal.vercel.app/api/add-release` with the 
 
 ## Status
 - ✅ Live on #releases
-- ✅ Posts to #assistant-coaches, #inside-sales, #cam-cross-functional
-- ✅ Edit modal with channel picker, rich text, emoji, file uploads
+- ✅ Posts to #assistant-coaches, #inside-sales, #cam-cross-functional, #support-ops
+- ✅ Edit modal with channel picker (4 channels), rich text, emoji, file uploads
 - ✅ Label emoji prefix on titles (🐛 / ✨ / 🔧)
 - ✅ Engcal release dates updated on approval
 - ✅ Bot icon + description set in Slack app settings
+- ✅ Only triggers on human photo posts (not deploy bot messages — avoids duplicates)
 
 ## Pending
+- [ ] Add `SUPPORT_OPS_CHANNEL_ID` to Vercel env vars (user must do manually)
 - [ ] Thread reply notifications — DM user when someone replies to a bot post
-- [ ] CAM channel end-to-end test
