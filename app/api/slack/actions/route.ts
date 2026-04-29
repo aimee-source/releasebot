@@ -44,13 +44,16 @@ export async function POST(request: NextRequest) {
     if (payload.type === "view_submission" && payload.view?.callback_id === "edit_modal") {
       const titleRichText = payload.view?.state?.values?.title_block?.title_input?.rich_text_value;
       const summaryRichText = payload.view?.state?.values?.summary_block?.summary_input?.rich_text_value;
-      const selectedOption = payload.view?.state?.values?.channel_block?.channel_input?.selected_option;
+      const selectedOptions = payload.view?.state?.values?.channel_block?.channel_input?.selected_options;
 
-      if (!titleRichText || !summaryRichText || !selectedOption) {
+      if (!titleRichText || !summaryRichText || !selectedOptions?.length) {
         return NextResponse.json({ error: "Missing form fields" }, { status: 400 });
       }
 
-      const [targetChannel, targetName] = (selectedOption.value as string).split("|");
+      const targets: { channelId: string; channelName: string }[] = selectedOptions.map((opt: { value: string }) => {
+        const [channelId, channelName] = opt.value.split("|");
+        return { channelId, channelName };
+      });
       const titlePlain = richTextToPlain(titleRichText);
       const summaryPlain = richTextToPlain(summaryRichText);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -64,57 +67,63 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: "Invalid form state" }, { status: 400 });
       }
 
+      const boldTitleBlocks = [
+        {
+          type: "rich_text",
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          elements: (titleRichText.elements ?? []).map((block: any) => ({
+            ...block,
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            elements: (block.elements ?? []).map((el: any) =>
+              el.type === "text" ? { ...el, style: { ...(el.style ?? {}), bold: true } } : el
+            )
+          }))
+        },
+        summaryRichText
+      ];
+
       // Respond immediately to close the modal (Slack requires response within 3s)
       waitUntil((async () => {
-        // Post the message — bold title as rich_text block, body preserving emojis/formatting
-        await slack.chat.postMessage({
-          channel: targetChannel,
-          text: `${titlePlain} — ${summaryPlain}`,
-          blocks: [
-            {
-              type: "rich_text",
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              elements: (titleRichText.elements ?? []).map((block: any) => ({
-                ...block,
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                elements: (block.elements ?? []).map((el: any) =>
-                  el.type === "text" ? { ...el, style: { ...(el.style ?? {}), bold: true } } : el
-                )
-              }))
-            },
-            summaryRichText
-          ]
-        });
+        for (const { channelId: targetChannel } of targets) {
+          // Post the message — bold title as rich_text block, body preserving emojis/formatting
+          await slack.chat.postMessage({
+            channel: targetChannel,
+            text: `${titlePlain} — ${summaryPlain}`,
+            blocks: boldTitleBlocks
+          });
 
-        // Upload any attached photos/videos as follow-up messages
-        for (const file of uploadedFiles) {
-          try {
-            const fileRes = await fetch(file.url_private, {
-              headers: { Authorization: `Bearer ${process.env.SLACK_BOT_TOKEN}` }
-            });
-            if (!fileRes.ok) throw new Error(`Download failed: ${fileRes.status}`);
-            const buffer = Buffer.from(await fileRes.arrayBuffer());
-            await slack.filesUploadV2({
-              channel_id: targetChannel,
-              file: buffer,
-              filename: file.name ?? "image.png",
-            });
-          } catch (fileErr) {
-            await slack.chat.postMessage({ channel: process.env.REVIEW_CHANNEL_ID!, text: `❌ Photo upload error: ${String(fileErr)}` });
+          // Upload any attached photos/videos as follow-up messages
+          for (const file of uploadedFiles) {
+            try {
+              const fileRes = await fetch(file.url_private, {
+                headers: { Authorization: `Bearer ${process.env.SLACK_BOT_TOKEN}` }
+              });
+              if (!fileRes.ok) throw new Error(`Download failed: ${fileRes.status}`);
+              const buffer = Buffer.from(await fileRes.arrayBuffer());
+              await slack.filesUploadV2({
+                channel_id: targetChannel,
+                file: buffer,
+                filename: file.name ?? "image.png",
+              });
+            } catch (fileErr) {
+              await slack.chat.postMessage({ channel: process.env.REVIEW_CHANNEL_ID!, text: `❌ Photo upload error: ${String(fileErr)}` });
+            }
           }
         }
+
+        const postedTo = targets.map(t => `#${t.channelName}`).join(", ");
 
         // Update the review card to show it was posted
         await slack.chat.update({
           channel: metadata.channelId,
           ts: metadata.messageTs,
-          text: `✅ Posted to #${targetName}`,
+          text: `✅ Posted to ${postedTo}`,
           blocks: [
             {
               type: "section",
               text: {
                 type: "mrkdwn",
-                text: `✅ *Posted to #${targetName}*\n\n*${titlePlain}*\n\n${summaryPlain}`
+                text: `✅ *Posted to ${postedTo}*\n\n*${titlePlain}*\n\n${summaryPlain}`
               }
             }
           ]
@@ -169,7 +178,7 @@ export async function POST(request: NextRequest) {
                 type: "input",
                 block_id: "channel_block",
                 element: {
-                  type: "radio_buttons",
+                  type: "checkboxes",
                   action_id: "channel_input",
                   options: channelOptions
                 },
