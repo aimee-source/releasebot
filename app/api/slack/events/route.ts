@@ -6,7 +6,6 @@ import { verifySlackSignature } from "@/lib/slack";
 
 export const maxDuration = 60;
 
-const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 const TICKET_ID_REGEX = /\b([A-Z][A-Z0-9]+-\d+)\b/g;
@@ -26,6 +25,11 @@ export async function POST(request: NextRequest) {
 
   if (!verifySlackSignature(rawBody, signature, timestamp)) {
     return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
+  }
+
+  // Ignore Slack retries — we already processed the original event
+  if (request.headers.get("x-slack-retry-num")) {
+    return NextResponse.json({ ok: true });
   }
 
   let body;
@@ -175,25 +179,9 @@ const TICKET_ID_EXACT = /^[A-Z][A-Z0-9]+-\d+$/;
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function extractTicketsFromImage(event: any): Promise<string[]> {
-  // Collect all image files from this message
+  // Only scan images attached directly to this message
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let files: any[] = (event.files ?? []).filter((f: any) => f.mimetype?.startsWith("image/"));
-  if (files.length === 0) {
-    // Check channel history for nearby human message with images
-    const releasesChannelId = process.env.RELEASES_CHANNEL_ID || "C028K3WGYV7";
-    const history = await slack.conversations.history({
-      channel: releasesChannelId,
-      latest: event.ts,
-      limit: 5,
-      inclusive: true,
-    });
-    const msgWithImage = history.messages?.find(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (m: any) => m.files?.some((f: any) => f.mimetype?.startsWith("image/"))
-    );
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    files = (msgWithImage?.files ?? []).filter((f: any) => f.mimetype?.startsWith("image/"));
-  }
+  const files: any[] = (event.files ?? []).filter((f: any) => f.mimetype?.startsWith("image/"));
   if (files.length === 0) return [];
 
   // Extract ticket IDs from all images in parallel, then deduplicate
@@ -312,9 +300,8 @@ async function processRelease(event: any, fullText: string, isHumanRelease = fal
 
     // Post one review card per ticket
     for (const issue of issues) {
-      const labelNames = issue.labels?.nodes?.map(l => l.name) ?? [];
       const linearContext = `${issue.identifier}: ${issue.title}${issue.description ? ` — ${issue.description.slice(0, 200)}` : ""}`;
-      await postReviewCard({ issue, linearContext, labelNames });
+      await postReviewCard({ issue, linearContext });
     }
 
   } catch (err) {
@@ -326,20 +313,13 @@ async function processRelease(event: any, fullText: string, isHumanRelease = fal
 async function postReviewCard({
   issue,
   linearContext,
-  labelNames = [],
 }: {
   issue: { identifier: string; title: string; description?: string } | null;
   linearContext: string;
-  labelNames?: string[];
 }) {
-  const isBug = labelNames.some(l => l.toLowerCase() === "bug");
-  const isNewFeature = labelNames.some(l => l.toLowerCase() === "feature" || l.toLowerCase() === "new feature");
-  const isImprovement = labelNames.some(l => l.toLowerCase() === "improvement");
-  const labelPrefix = isBug ? "🐛 Bug Fix: " : isNewFeature ? "✨ New Feature: " : isImprovement ? "🔧 Improvement: " : "";
-  const labelContext = isBug ? "bug fix" : isNewFeature ? "new feature" : isImprovement ? "improvement" : "update";
-
   let title = issue ? issue.title : "New Release";
   let summary = linearContext;
+  let labelPrefix = "";
 
   try {
     const response = await anthropic.messages.create({
@@ -347,12 +327,17 @@ async function postReviewCard({
       max_tokens: 300,
       messages: [{
         role: "user",
-        content: `You are summarizing a software ${labelContext} release note for assistant coaches at a fitness coaching company called Avida.
+        content: `You are summarizing a software release note for assistant coaches at a fitness coaching company called Avida.
 ${linearContext ? `\nLinear ticket details:\n${linearContext}` : ""}
 
-Generate a clean title (5–8 words, no technical jargon or ticket numbers) and a 1–2 sentence plain English summary that an assistant coach would understand and find relevant. Write the summary in the tone of a ${labelContext}.
+First, classify this ticket based on its title and description (ignore any Linear labels — they are often wrong):
+- "bug_fix" if it fixes a crash, error, or broken behaviour
+- "new_feature" if it adds something that didn't exist before
+- "improvement" if it enhances something that already existed
 
-Respond only with JSON: {"title": "...", "summary": "..."}`
+Then generate a clean title (5–8 words, no technical jargon or ticket numbers) and a 1–2 sentence plain English summary that an assistant coach would understand and find relevant.
+
+Respond only with JSON: {"type": "bug_fix|new_feature|improvement", "title": "...", "summary": "..."}`
       }]
     });
 
@@ -360,6 +345,12 @@ Respond only with JSON: {"title": "...", "summary": "..."}`
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : text);
     if (typeof parsed.title === "string" && typeof parsed.summary === "string") {
+      const typeMap: Record<string, string> = {
+        bug_fix: "🐛 Bug Fix: ",
+        new_feature: "✨ New Feature: ",
+        improvement: "🔧 Improvement: ",
+      };
+      labelPrefix = typeMap[parsed.type] ?? "";
       title = `${labelPrefix}${parsed.title}`;
       summary = parsed.summary;
     }
@@ -372,34 +363,21 @@ Respond only with JSON: {"title": "...", "summary": "..."}`
   await slackClient.chat.postMessage({
     channel: process.env.REVIEW_CHANNEL_ID!,
     text: `New release pending approval: ${title}`,
-    blocks: [
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    blocks: ([
       {
         type: "section",
-        text: {
-          type: "mrkdwn",
-          text: `*📣 New release pending approval*\n\n*${title}*\n\n${summary}`
-        }
+        text: { type: "mrkdwn", text: `*📣 New release pending approval*\n\n*${title}*\n\n${summary}` }
       },
+      ...(issue?.identifier ? [{ type: "context", elements: [{ type: "mrkdwn", text: `<https://linear.app/system2/issue/${issue.identifier}|${issue.identifier}>` }] }] : []),
       {
         type: "actions",
         elements: [
-          {
-            type: "button",
-            text: { type: "plain_text", text: "✏️ Edit & Post" },
-            style: "primary",
-            action_id: "edit_release",
-            value: JSON.stringify({ title, summary, ticketId: issue?.identifier ?? null })
-          },
-          {
-            type: "button",
-            text: { type: "plain_text", text: "❌ Reject" },
-            style: "danger",
-            action_id: "reject_release",
-            value: "reject"
-          }
+          { type: "button", text: { type: "plain_text", text: "✏️ Edit & Post" }, style: "primary", action_id: "edit_release", value: JSON.stringify({ title, summary, ticketId: issue?.identifier ?? null }) },
+          { type: "button", text: { type: "plain_text", text: "❌ Reject" }, style: "danger", action_id: "reject_release", value: "reject" }
         ]
       }
-    ]
+    ] as any[])
   });
 
   console.log("Posted to review channel:", title);
