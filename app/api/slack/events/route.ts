@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { waitUntil } from "@vercel/functions";
 import { WebClient } from "@slack/web-api";
 import Anthropic from "@anthropic-ai/sdk";
+import { init as initInstant } from "@instantdb/admin";
 import { verifySlackSignature } from "@/lib/slack";
 
 export const maxDuration = 60;
@@ -45,6 +46,16 @@ export async function POST(request: NextRequest) {
   }
 
   const event = body.event;
+
+  // Handle ticket lookup queries in #releasebotreview
+  const reviewChannelId = process.env.REVIEW_CHANNEL_ID || "C0AN5CB1UH1";
+  if (event?.type === "message" && event.channel === reviewChannelId && !event.bot_id && !event.subtype) {
+    const ticketMatch = (event.text ?? "").match(/\b([A-Z][A-Z0-9]+-\d+)\b/i);
+    if (ticketMatch) {
+      waitUntil(handleTicketQuery(ticketMatch[1].toUpperCase(), reviewChannelId, event.ts));
+      return NextResponse.json({ ok: true });
+    }
+  }
 
   // Only process messages from #releases channel
   const releasesChannelId = process.env.RELEASES_CHANNEL_ID || "C028K3WGYV7";
@@ -381,4 +392,36 @@ Respond only with JSON: {"type": "bug_fix|new_feature|improvement", "title": "..
   });
 
   console.log("Posted to review channel:", title);
+}
+
+async function handleTicketQuery(ticketId: string, channel: string, ts: string) {
+  const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
+
+  try {
+    const db = initInstant({
+      appId: process.env.ENGCAL_APP_ID!,
+      adminToken: process.env.ENGCAL_ADMIN_TOKEN!,
+    });
+
+    const { features } = await db.query({ features: { $: { where: { ticketId } } } });
+    const feature = features[0];
+
+    let text: string;
+    if (!feature) {
+      text = `❓ *${ticketId}* — not found in engcal. It may not be tracked as a feature.`;
+    } else if (feature.releaseDate) {
+      const date = new Date(feature.releaseDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+      text = `✅ *${ticketId}* released on ${date}\n>${feature.title}`;
+    } else if (feature.demoDate) {
+      const date = new Date(feature.demoDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+      text = `👀 *${ticketId}* is in review (since ${date}), not released yet\n>${feature.title}`;
+    } else {
+      text = `🔨 *${ticketId}* is in progress, not released yet\n>${feature.title}`;
+    }
+
+    await slack.chat.postMessage({ channel, thread_ts: ts, text });
+  } catch (err) {
+    console.error("handleTicketQuery error:", err);
+    await slack.chat.postMessage({ channel, thread_ts: ts, text: `❌ Couldn't look up ${ticketId} — check logs.` });
+  }
 }

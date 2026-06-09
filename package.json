@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.80.0",
+    "@instantdb/admin": "^1.0.46",
     "@slack/web-api": "^7.15.0",
     "@vercel/functions": "^3.4.3",
     "next": "16.2.1",
