@@ -19,6 +19,34 @@ const GITHUB_REPOS: Record<string, string> = {
   web: "Fitmoola/system2-web",
 };
 
+async function handlePostCommand(ticketIds: string[], channel: string, ts: string) {
+  const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
+  await slack.chat.postMessage({ channel, thread_ts: ts, text: `⏳ Fetching ${ticketIds.length} ticket(s)…` });
+
+  try {
+    const numbers = ticketIds.map(id => parseInt(id.split("-")[1])).filter(Boolean);
+    const linearRes = await fetch("https://api.linear.app/graphql", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": process.env.LINEAR_API_KEY! },
+      body: JSON.stringify({
+        query: `{ issues(filter: { number: { in: ${JSON.stringify(numbers)} } }) { nodes { identifier title description labels { nodes { name } } } } }`
+      })
+    });
+    const linearData = await linearRes.json();
+    const issues: { identifier: string; title: string; description?: string }[] = linearData?.data?.issues?.nodes ?? [];
+
+    for (const issue of issues) {
+      const linearContext = `${issue.identifier}: ${issue.title}${issue.description ? ` — ${issue.description.slice(0, 200)}` : ""}`;
+      await postReviewCard({ issue, linearContext });
+    }
+
+    await slack.chat.postMessage({ channel, thread_ts: ts, text: `✅ Posted ${issues.length} review card(s)` });
+  } catch (err) {
+    console.error("handlePostCommand error:", err);
+    await slack.chat.postMessage({ channel, thread_ts: ts, text: `❌ Failed to post cards — check logs.` });
+  }
+}
+
 export async function POST(request: NextRequest) {
   const rawBody = await request.text();
   const signature = request.headers.get("x-slack-signature") ?? "";
@@ -47,10 +75,22 @@ export async function POST(request: NextRequest) {
 
   const event = body.event;
 
-  // Handle ticket lookup queries in #releasebotreview
+  // Handle commands in #releasebotreview
   const reviewChannelId = process.env.REVIEW_CHANNEL_ID || "C0AN5CB1UH1";
   if (event?.type === "message" && event.channel === reviewChannelId && !event.bot_id && !event.subtype) {
-    const ticketMatch = (event.text ?? "").match(/\b([A-Z][A-Z0-9]+-\d+)\b/i);
+    const text = event.text ?? "";
+
+    // "post S2-XXXX, S2-YYYY" — manually trigger review cards for specific tickets
+    if (/^post\b/i.test(text)) {
+      const ticketIds = [...text.matchAll(/\b([A-Z][A-Z0-9]+-\d+)\b/gi)].map(m => m[1].toUpperCase());
+      if (ticketIds.length > 0) {
+        waitUntil(handlePostCommand(ticketIds, reviewChannelId, event.ts));
+        return NextResponse.json({ ok: true });
+      }
+    }
+
+    // "was S2-XXXX released?" ticket lookup
+    const ticketMatch = text.match(/\b([A-Z][A-Z0-9]+-\d+)\b/i);
     if (ticketMatch) {
       waitUntil(handleTicketQuery(ticketMatch[1].toUpperCase(), reviewChannelId, event.ts));
       return NextResponse.json({ ok: true });
@@ -88,7 +128,7 @@ export async function POST(request: NextRequest) {
   }
 
   // Respond to Slack immediately (must be within 3 seconds)
-  waitUntil(processRelease(event, fullText, true));
+  waitUntil(processRelease(event, fullText, isHumanRelease));
   return NextResponse.json({ ok: true });
 }
 
