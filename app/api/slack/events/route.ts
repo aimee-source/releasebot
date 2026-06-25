@@ -65,8 +65,9 @@ export async function POST(request: NextRequest) {
 
   // Build searchable text from both event.text and any attachments
   // (System2 Deploy Bot puts content in attachments, not event.text)
+  // Include title_link/from_url so GitHub Actions run URLs are found
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const attachmentText = (event.attachments ?? []).map((a: any) => `${a.text ?? ""} ${a.fallback ?? ""} ${a.pretext ?? ""}`).join(" ");
+  const attachmentText = (event.attachments ?? []).map((a: any) => `${a.text ?? ""} ${a.fallback ?? ""} ${a.pretext ?? ""} ${a.title_link ?? ""} ${a.from_url ?? ""}`).join(" ");
   const fullText = `${event.text ?? ""} ${attachmentText}`.toLowerCase();
 
   // Skip message_changed/deleted subtypes — allow file_share (human posts image)
@@ -74,11 +75,15 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: true });
   }
 
-  // Only trigger on human photo post (image/file share or Linear URL)
+  // Human post: image/file share or Linear URL
   const isHumanRelease = !event.bot_id &&
     (event.files?.length > 0 || event.subtype === "file_share" || fullText.includes("linear.app"));
 
-  if (!isHumanRelease) {
+  // Deploy bot success post — triggers GitHub commit extraction
+  const isDeployBotSuccess = !!event.bot_id &&
+    (fullText.includes("success") || attachmentText.toLowerCase().includes("success"));
+
+  if (!isHumanRelease && !isDeployBotSuccess) {
     return NextResponse.json({ ok: true });
   }
 
