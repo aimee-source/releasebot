@@ -312,7 +312,10 @@ async function processRelease(event: any, fullText: string, isHumanRelease = fal
       return;
     }
 
-    if (ticketIds.length === 0) return;
+    if (ticketIds.length === 0) {
+      await debugPost(`🔍 Release detected (${isHumanRelease ? "human post" : "deploy bot"}) but no ticket IDs found. Files: ${event.files?.length ?? 0}, subtype: ${event.subtype ?? "none"}`);
+      return;
+    }
 
     // Look up tickets in Linear
     const linearRes = await fetch("https://api.linear.app/graphql", {
