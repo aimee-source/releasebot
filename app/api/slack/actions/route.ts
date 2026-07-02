@@ -84,13 +84,16 @@ export async function POST(request: NextRequest) {
 
       // Respond immediately to close the modal (Slack requires response within 3s)
       waitUntil((async () => {
+        const postedMessages: { channelId: string; ts: string }[] = [];
+
         for (const { channelId: targetChannel } of targets) {
           // Post the message — bold title as rich_text block, body preserving emojis/formatting
-          await slack.chat.postMessage({
+          const postResult = await slack.chat.postMessage({
             channel: targetChannel,
             text: `${titlePlain} — ${summaryPlain}`,
             blocks: boldTitleBlocks
           });
+          if (postResult.ts) postedMessages.push({ channelId: targetChannel, ts: postResult.ts });
 
           // Upload any attached photos/videos as follow-up messages
           for (const file of uploadedFiles) {
@@ -113,20 +116,32 @@ export async function POST(request: NextRequest) {
 
         const postedTo = targets.map(t => `#${t.channelName}`).join(", ");
 
-        // Update the review card to show it was posted
+        // Update the review card to show it was posted, with an edit button
         await slack.chat.update({
           channel: metadata.channelId,
           ts: metadata.messageTs,
           text: `✅ Posted to ${postedTo}`,
-          blocks: [
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          blocks: ([
             {
               type: "section",
               text: {
                 type: "mrkdwn",
                 text: `✅ *Posted to ${postedTo}*\n\n*${titlePlain}*\n\n${summaryPlain}`
               }
+            },
+            {
+              type: "actions",
+              elements: [
+                {
+                  type: "button",
+                  text: { type: "plain_text", text: "✏️ Edit post" },
+                  action_id: "edit_posted",
+                  value: JSON.stringify({ postedMessages, titlePlain, summaryPlain })
+                }
+              ]
             }
-          ]
+          ] as any[])
         });
 
         // Update engcal release date for this ticket
@@ -143,6 +158,51 @@ export async function POST(request: NextRequest) {
           } catch (engcalErr) {
             console.error("engcal update failed:", engcalErr);
           }
+        }
+      })());
+
+      return NextResponse.json({});
+    }
+
+    // Handle edit of an already-posted message
+    if (payload.type === "view_submission" && payload.view?.callback_id === "edit_posted_modal") {
+      const titleRichText = payload.view?.state?.values?.title_block?.title_input?.rich_text_value;
+      const summaryRichText = payload.view?.state?.values?.summary_block?.summary_input?.rich_text_value;
+
+      let metadata;
+      try {
+        metadata = JSON.parse(payload.view.private_metadata);
+        if (!metadata.postedMessages) throw new Error("Invalid metadata");
+      } catch {
+        return NextResponse.json({ error: "Invalid form state" }, { status: 400 });
+      }
+
+      const titlePlain = richTextToPlain(titleRichText);
+      const summaryPlain = richTextToPlain(summaryRichText);
+      const boldTitleBlocks = [
+        {
+          type: "rich_text",
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          elements: (titleRichText.elements ?? []).map((block: any) => ({
+            ...block,
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            elements: (block.elements ?? []).map((el: any) =>
+              el.type === "text" ? { ...el, style: { ...(el.style ?? {}), bold: true } } : el
+            )
+          }))
+        },
+        summaryRichText
+      ];
+
+      waitUntil((async () => {
+        for (const { channelId: ch, ts } of metadata.postedMessages) {
+          await slack.chat.update({
+            channel: ch,
+            ts,
+            text: `${titlePlain} — ${summaryPlain}`,
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            blocks: boldTitleBlocks as any[]
+          });
         }
       })());
 
@@ -261,6 +321,49 @@ export async function POST(request: NextRequest) {
           ]
         });
       })());
+
+    } else if (action?.action_id === "edit_posted") {
+      const { postedMessages, titlePlain, summaryPlain } = JSON.parse(action.value);
+
+      await slack.views.open({
+        trigger_id: payload.trigger_id,
+        view: {
+          type: "modal",
+          callback_id: "edit_posted_modal",
+          title: { type: "plain_text", text: "Edit Posted Release" },
+          submit: { type: "plain_text", text: "Save changes" },
+          close: { type: "plain_text", text: "Cancel" },
+          private_metadata: JSON.stringify({ postedMessages }),
+          blocks: [
+            {
+              type: "input",
+              block_id: "title_block",
+              element: {
+                type: "rich_text_input",
+                action_id: "title_input",
+                initial_value: {
+                  type: "rich_text",
+                  elements: [{ type: "rich_text_section", elements: [{ type: "text", text: titlePlain }] }]
+                }
+              },
+              label: { type: "plain_text", text: "Title" }
+            },
+            {
+              type: "input",
+              block_id: "summary_block",
+              element: {
+                type: "rich_text_input",
+                action_id: "summary_input",
+                initial_value: {
+                  type: "rich_text",
+                  elements: [{ type: "rich_text_section", elements: [{ type: "text", text: summaryPlain }] }]
+                }
+              },
+              label: { type: "plain_text", text: "Message" }
+            }
+          ]
+        }
+      });
 
     } else if (action?.action_id === "reject_release") {
       await slack.chat.update({
