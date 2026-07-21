@@ -97,6 +97,26 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  // Route thread replies in release target channels to Aimee via DM
+  const releaseTargetChannels = [
+    process.env.ASSISTANT_COACHES_CHANNEL_ID,
+    process.env.INSIDE_SALES_CHANNEL_ID,
+    process.env.CAM_CHANNEL_ID,
+    process.env.SUPPORT_OPS_CHANNEL_ID,
+  ].filter(Boolean);
+
+  if (
+    event?.type === "message" &&
+    !event.bot_id &&
+    !event.subtype &&
+    event.thread_ts &&
+    event.thread_ts !== event.ts &&
+    releaseTargetChannels.includes(event.channel)
+  ) {
+    waitUntil(handleThreadReply(event));
+    return NextResponse.json({ ok: true });
+  }
+
   // Only process messages from #releases channel
   const releasesChannelId = process.env.RELEASES_CHANNEL_ID || "C028K3WGYV7";
   if (!event || event.type !== "message" || event.channel !== releasesChannelId) {
@@ -440,6 +460,35 @@ Respond only with JSON: {"type": "bug_fix|new_feature|improvement", "title": "..
   });
 
   console.log("Posted to review channel:", title);
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function handleThreadReply(event: any) {
+  const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
+
+  try {
+    // Confirm the parent message is from our bot
+    const thread = await slack.conversations.replies({
+      channel: event.channel,
+      ts: event.thread_ts,
+      limit: 1,
+    });
+    const parent = thread.messages?.[0];
+    if (!parent?.bot_id) return;
+
+    const permalinkResult = await slack.chat.getPermalink({
+      channel: event.channel,
+      message_ts: event.ts,
+    });
+
+    const notifyId = process.env.NOTIFY_SLACK_ID || "U04FC4WGZ8U";
+    await slack.chat.postMessage({
+      channel: notifyId,
+      text: `💬 <@${event.user}> replied in <#${event.channel}>:\n>${event.text}${permalinkResult.permalink ? `\n<${permalinkResult.permalink}|View thread>` : ""}`,
+    });
+  } catch (err) {
+    console.error("handleThreadReply error:", err);
+  }
 }
 
 async function handleTicketQuery(ticketId: string, channel: string, ts: string) {
