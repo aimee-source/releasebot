@@ -341,6 +341,26 @@ async function processRelease(event: any, fullText: string, isHumanRelease = fal
       return;
     }
 
+    // Filter out tickets already released in engcal
+    if (process.env.ENGCAL_APP_ID && process.env.ENGCAL_ADMIN_TOKEN) {
+      try {
+        const db = initInstant({ appId: process.env.ENGCAL_APP_ID!, adminToken: process.env.ENGCAL_ADMIN_TOKEN! });
+        const alreadyReleased = new Set<string>();
+        await Promise.all(ticketIds.map(async (id) => {
+          const { features } = await db.query({ features: { $: { where: { ticketId: id } } } });
+          if (features[0]?.releaseDate) alreadyReleased.add(id);
+        }));
+        if (alreadyReleased.size > 0) {
+          await debugPost(`⏭️ Skipping ${alreadyReleased.size} already-released ticket(s): ${[...alreadyReleased].join(", ")}`);
+          ticketIds = ticketIds.filter(id => !alreadyReleased.has(id));
+        }
+      } catch (err) {
+        console.error("Engcal filter error:", err);
+      }
+    }
+
+    if (ticketIds.length === 0) return;
+
     // Look up tickets in Linear
     const linearRes = await fetch("https://api.linear.app/graphql", {
       method: "POST",
