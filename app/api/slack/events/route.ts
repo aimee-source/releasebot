@@ -204,9 +204,10 @@ async function getTicketsFromGitHub(fullText: string, attachText: string): Promi
   if (!runsRes.ok) throw new Error(`GitHub runs list error: ${runsRes.status}`);
   const runsData = await runsRes.json();
 
-  // Find a run older than the current one
+  // Find the most recent run that ran before the current one (by run ID)
+  // Using ID order (not SHA) so re-runs of the same commit don't span back to ancient history
   const prevRun = (runsData.workflow_runs ?? []).find(
-    (r: { id: number; head_sha: string }) => r.id !== parseInt(currentRunId) && r.head_sha !== currentSha
+    (r: { id: number }) => r.id < parseInt(currentRunId)
   );
   if (!prevRun) throw new Error(`No previous successful run found for workflow ${workflowId}`);
 
@@ -227,6 +228,9 @@ async function getTicketsFromGitHub(fullText: string, attachText: string): Promi
     getMasterSha(currentSha),
     getMasterSha(prevSha),
   ]);
+
+  // Same master SHA = re-run of the same code, nothing new to post
+  if (currentMasterSha === prevMasterSha) return [];
 
   // Compare master commits between the two deploys
   const compareRes = await fetch(
