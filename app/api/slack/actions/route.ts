@@ -219,7 +219,7 @@ export async function POST(request: NextRequest) {
       const channelOptions = [
         { text: { type: "plain_text" as const, text: "#assistant-coaches" }, value: `${process.env.ASSISTANT_COACHES_CHANNEL_ID}|assistant-coaches` },
         { text: { type: "plain_text" as const, text: "#inside-sales" }, value: `${process.env.INSIDE_SALES_CHANNEL_ID}|inside-sales` },
-        { text: { type: "plain_text" as const, text: "#cam-cross-functional" }, value: `${process.env.CAM_CHANNEL_ID}|cam-cross-functional` },
+        { text: { type: "plain_text" as const, text: "#cam-division" }, value: `${process.env.CAM_CHANNEL_ID}|cam-division` },
         { text: { type: "plain_text" as const, text: "#support-ops" }, value: `${process.env.SUPPORT_OPS_CHANNEL_ID}|support-ops` },
       ];
 
